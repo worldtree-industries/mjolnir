@@ -20,6 +20,13 @@ type APIError struct {
 	code int
 }
 
+func NewAPIError(err error, code int) *APIError {
+	return &APIError{
+		err:  err,
+		code: code,
+	}
+}
+
 func (e *APIError) Error() string {
 	return e.err.Error()
 }
@@ -52,13 +59,6 @@ func UnauthorizedErr(err error) *APIError {
 	}
 }
 
-func NewAPIError(err error, code int) *APIError {
-	return &APIError{
-		err:  err,
-		code: code,
-	}
-}
-
 func ErrorHandler(h ErrorReturningHandler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if err := h(w, r); err != nil {
@@ -81,10 +81,10 @@ func handleError(w http.ResponseWriter, r *http.Request, reqErr *APIError) {
 				Msg("internal server error occurred")
 
 			w.WriteHeader(reqErr.code)
-		_ = encoder.Encode(ErrorResponse{
-			Error: "Internal Server Error",
-			Code:  http.StatusInternalServerError,
-		})
+			_ = encoder.Encode(ErrorResponse{
+				Error: "Internal Server Error",
+				Code:  http.StatusInternalServerError,
+			})
 			return
 		}
 

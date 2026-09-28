@@ -11,7 +11,7 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// Context keys for correlation fields
+// Context keys for correlation fields.
 type ctxKey int
 
 const (

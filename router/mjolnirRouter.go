@@ -13,6 +13,8 @@ import (
 )
 
 // New creates a new pre-configured chi router.
+//
+//nolint:reassign // initialize logger for router
 func New() *chi.Mux {
 	log.Logger = log.Output(zerolog.ConsoleWriter{
 		Out:        os.Stdout,

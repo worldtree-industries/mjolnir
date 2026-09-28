@@ -8,7 +8,7 @@ import (
 )
 
 // RespondJSON sends a JSON response with proper headers.
-func RespondJSON(w http.ResponseWriter, r *http.Request, status int, payload any) error {
+func RespondJSON(w http.ResponseWriter, _ *http.Request, status int, payload any) error {
 	w.Header().Set("Content-Type", "application/json")
 
 	response, err := json.Marshal(payload)
@@ -18,7 +18,7 @@ func RespondJSON(w http.ResponseWriter, r *http.Request, status int, payload any
 
 	w.WriteHeader(status)
 
-	if _, err := w.Write(response); err != nil {
+	if _, err = w.Write(response); err != nil {
 		return fmt.Errorf("failed to write response: %w", err)
 	}
 
@@ -37,7 +37,7 @@ func DecodeJSON(r *http.Request, v any) ([]byte, error) {
 	}
 	defer r.Body.Close()
 
-	if err := json.Unmarshal(bodyBytes, v); err != nil {
+	if err = json.Unmarshal(bodyBytes, v); err != nil {
 		return nil, fmt.Errorf("failed to decode JSON: %w", err)
 	}
 	return bodyBytes, nil

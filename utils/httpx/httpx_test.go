@@ -87,21 +87,21 @@ func TestRespondJSON(t *testing.T) {
 				t.Errorf("expected status %d, got %d", test.expectedCode, result.StatusCode)
 			}
 
-			body, err := io.ReadAll(result.Body)
-			if err != nil {
-				t.Fatalf("unexpected error while reading body: %v", err)
+			bodyBytes, readErr := io.ReadAll(result.Body)
+			if readErr != nil {
+				t.Fatalf("unexpected error while reading body: %v", readErr)
 			}
 
-			if !json.Valid([]byte(test.expectedBody)) && string(body) != test.expectedBody {
-				t.Errorf("expected body %q, got %q", test.expectedBody, body)
+			if !json.Valid([]byte(test.expectedBody)) && string(bodyBytes) != test.expectedBody {
+				t.Errorf("expected body %q, got %q", test.expectedBody, bodyBytes)
 			} else if json.Valid([]byte(test.expectedBody)) {
 				expBody := make(map[string]any)
 				gotBody := make(map[string]any)
-				if err := json.Unmarshal([]byte(test.expectedBody), &expBody); err != nil {
-					t.Fatalf("failed to parse expected body: %v", err)
+				if unmarshalErr := json.Unmarshal([]byte(test.expectedBody), &expBody); unmarshalErr != nil {
+					t.Fatalf("failed to parse expected body: %v", unmarshalErr)
 				}
-				if err := json.Unmarshal(body, &gotBody); err != nil {
-					t.Fatalf("failed to parse body: %v", err)
+				if unmarshalErr := json.Unmarshal(bodyBytes, &gotBody); unmarshalErr != nil {
+					t.Fatalf("failed to parse body: %v", unmarshalErr)
 				}
 				if !equals(expBody, gotBody) {
 					t.Errorf("expected body %v, got %v", expBody, gotBody)

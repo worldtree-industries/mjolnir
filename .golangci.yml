@@ -473,3 +473,9 @@ linters:
           - gosec
           - noctx
           - wrapcheck
+          - testpackage
+          - paralleltest
+          - tparallel
+          - gocognit
+          - reassign
+          - revive
