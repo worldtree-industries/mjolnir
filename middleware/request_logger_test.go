@@ -12,6 +12,7 @@ import (
 )
 
 func TestRequestLogger(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name         string
 		method       string
@@ -109,6 +110,7 @@ func TestRequestLogger(t *testing.T) {
 }
 
 func TestResponseWriter(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name         string
 		writeHeader  bool
@@ -190,7 +192,7 @@ func BenchmarkRequestLogger(b *testing.B) {
 	rr := httptest.NewRecorder()
 
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		handler.ServeHTTP(rr, req)
 	}
 }

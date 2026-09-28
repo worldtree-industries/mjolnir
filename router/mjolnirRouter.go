@@ -4,14 +4,15 @@ import (
 	"os"
 	"time"
 
-	enhancedmiddleware "github.com/dfryer1193/mjolnir/middleware"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
+
+	enhancedmiddleware "github.com/dfryer1193/mjolnir/middleware"
 )
 
-// New creates a new pre-configured chi router
+// New creates a new pre-configured chi router.
 func New() *chi.Mux {
 	log.Logger = log.Output(zerolog.ConsoleWriter{
 		Out:        os.Stdout,

@@ -8,6 +8,7 @@ import (
 )
 
 func TestRequestID(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name            string
 		existingReqID   string
@@ -83,6 +84,7 @@ func TestRequestID(t *testing.T) {
 }
 
 func TestGetRequestID(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		ctx      context.Context
@@ -116,11 +118,12 @@ func TestGetRequestID(t *testing.T) {
 }
 
 func TestGenerateRequestID(t *testing.T) {
+	t.Parallel()
 	// Test multiple generations to ensure uniqueness
 	ids := make(map[string]bool)
 	iterations := 1000
 
-	for i := 0; i < iterations; i++ {
+	for range iterations {
 		id := generateRequestID()
 
 		// Verify UUID length
@@ -142,7 +145,7 @@ func BenchmarkRequestIDMiddleware(b *testing.B) {
 	rr := httptest.NewRecorder()
 
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		handler.ServeHTTP(rr, req)
 	}
 }
@@ -154,7 +157,7 @@ func BenchmarkRequestIDMiddlewareWithExisting(b *testing.B) {
 	rr := httptest.NewRecorder()
 
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		handler.ServeHTTP(rr, req)
 	}
 }

@@ -4,17 +4,18 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/rs/zerolog/log"
+
 	"github.com/dfryer1193/mjolnir/router"
 	"github.com/dfryer1193/mjolnir/utils/errorx"
 	"github.com/dfryer1193/mjolnir/utils/httpx"
-	"github.com/rs/zerolog/log"
 )
 
 func main() {
 	r := router.New()
 
 	r.Get("/", errorx.ErrorHandler(
-		func(w http.ResponseWriter, r *http.Request) *errorx.ApiError {
+		func(w http.ResponseWriter, r *http.Request) *errorx.APIError {
 			_, err := w.Write([]byte("Hello World!"))
 			if err != nil {
 				return errorx.InternalServerErr(err)
@@ -24,11 +25,11 @@ func main() {
 	)
 
 	r.Get("/json", func(w http.ResponseWriter, r *http.Request) {
-		httpx.RespondJSON(w, r, 200, map[string]string{"msg": "Hello World!"})
+		_ = httpx.RespondJSON(w, r, 200, map[string]string{"msg": "Hello World!"})
 	})
 
 	r.Post("/json", errorx.ErrorHandler(
-		func(w http.ResponseWriter, r *http.Request) *errorx.ApiError {
+		func(w http.ResponseWriter, r *http.Request) *errorx.APIError {
 			var name struct {
 				Name string `json:"name"`
 			}
@@ -38,7 +39,7 @@ func main() {
 				return errorx.BadRequestErr(err)
 			}
 
-			httpx.RespondJSON(w, r, 200, map[string]string{"msg": "Hello " + name.Name})
+			_ = httpx.RespondJSON(w, r, 200, map[string]string{"msg": "Hello " + name.Name})
 			return nil
 		}),
 	)
@@ -48,8 +49,8 @@ func main() {
 	})
 
 	r.Get("/error", errorx.ErrorHandler(
-		func(w http.ResponseWriter, r *http.Request) *errorx.ApiError {
-			return errorx.NewApiError(fmt.Errorf("This is an error"), http.StatusServiceUnavailable)
+		func(w http.ResponseWriter, r *http.Request) *errorx.APIError {
+			return errorx.NewAPIError(fmt.Errorf("this is an error"), http.StatusServiceUnavailable)
 		}),
 	)
 
