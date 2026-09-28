@@ -1,13 +1,14 @@
 package router
 
 import (
+	"os"
+	"time"
+
 	enhancedmiddleware "github.com/dfryer1193/mjolnir/middleware"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
-	"os"
-	"time"
 )
 
 // New creates a new pre-configured chi router

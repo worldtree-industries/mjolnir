@@ -1,9 +1,10 @@
 package middleware
 
 import (
-	"github.com/rs/zerolog/log"
 	"net/http"
 	"time"
+
+	"github.com/rs/zerolog/log"
 )
 
 // RequestLogger is a middleware that logs HTTP requests using zerolog

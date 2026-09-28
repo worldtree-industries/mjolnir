@@ -2,12 +2,13 @@ package middleware
 
 import (
 	"bytes"
-	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 )
 
 func TestRequestLogger(t *testing.T) {

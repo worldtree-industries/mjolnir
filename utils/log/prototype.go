@@ -4,13 +4,18 @@ import (
 	"context"
 	"io"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/rs/zerolog"
 )
 
 // redactKeys are the field keys that should be masked in logs.
-var redactKeys = []string{"password", "authorization", "email"}
+const (
+	redactPassword      = "password"
+	redactAuthorization = "authorization"
+	redactEmail         = "email"
+)
 
 // Logger wraps zerolog.Logger.
 type Logger struct {
@@ -24,7 +29,7 @@ func New(name string) *Logger {
 }
 
 // With adds optional fields to the log line, redacting sensitive values.
-func (l *Logger) With(key string, value interface{}) *Logger {
+func (l *Logger) With(key string, value any) *Logger {
 	redacted := value
 	if isSensitive(key) {
 		redacted = "***"
@@ -47,12 +52,7 @@ func (l *Logger) WithContext(ctx context.Context) *Logger {
 // isSensitive checks if a key should be redacted.
 func isSensitive(key string) bool {
 	lower := strings.ToLower(key)
-	for _, sensitive := range redactKeys {
-		if lower == sensitive {
-			return true
-		}
-	}
-	return false
+	return slices.Contains([]string{redactPassword, redactAuthorization, redactEmail}, lower)
 }
 
 // MiddlewareAdapter returns a chi-style middleware handler.

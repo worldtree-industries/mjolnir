@@ -2,11 +2,12 @@ package main
 
 import (
 	"fmt"
+	"net/http"
+
 	"github.com/dfryer1193/mjolnir/router"
 	"github.com/dfryer1193/mjolnir/utils/errorx"
 	"github.com/dfryer1193/mjolnir/utils/httpx"
 	"github.com/rs/zerolog/log"
-	"net/http"
 )
 
 func main() {

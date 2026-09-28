@@ -2,9 +2,10 @@ package errorx
 
 import (
 	"encoding/json"
+	"net/http"
+
 	"github.com/dfryer1193/mjolnir/middleware"
 	"github.com/rs/zerolog/log"
-	"net/http"
 )
 
 type ErrorReturningHandler func(w http.ResponseWriter, r *http.Request) *ApiError

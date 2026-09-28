@@ -36,11 +36,11 @@ func TestSet_New(t *testing.T) {
 
 func TestSet_Add(t *testing.T) {
 	tests := []struct {
-		name           string
-		initial        []int
-		add            []int
-		expectedLen    int
-		expectedItems  []int
+		name          string
+		initial       []int
+		add           []int
+		expectedLen   int
+		expectedItems []int
 	}{
 		{"add to empty set", []int{}, []int{1}, 1, []int{1}},
 		{"add duplicate", []int{1}, []int{1}, 1, []int{1}},
@@ -70,11 +70,11 @@ func TestSet_Add(t *testing.T) {
 
 func TestSet_Remove(t *testing.T) {
 	tests := []struct {
-		name          string
-		initial       []int
-		remove        []int
-		expectedLen   int
-		shouldContain []int
+		name             string
+		initial          []int
+		remove           []int
+		expectedLen      int
+		shouldContain    []int
 		shouldNotContain []int
 	}{
 		{"remove existing item", []int{1, 2, 3}, []int{2}, 2, []int{1, 3}, []int{2}},

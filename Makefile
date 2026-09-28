@@ -1,6 +1,6 @@
 .PHONY: build lint test clean
 
-BINARY=better-logging
+BINARY=mjolnir
 GOLANGCI_LINT=$(shell go env GOPATH)/bin/golangci-lint
 
 build:
