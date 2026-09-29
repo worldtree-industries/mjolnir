@@ -1,12 +1,13 @@
 package middleware
 
 import (
-	"github.com/rs/zerolog/log"
 	"net/http"
 	"time"
+
+	"github.com/rs/zerolog/log"
 )
 
-// RequestLogger is a middleware that logs HTTP requests using zerolog
+// RequestLogger is a middleware that logs HTTP requests using zerolog.
 func RequestLogger(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
@@ -28,7 +29,7 @@ func RequestLogger(next http.Handler) http.Handler {
 	})
 }
 
-// responseWriter is a custom response writer that captures the status code
+// responseWriter is a custom response writer that captures the status code.
 type responseWriter struct {
 	w           http.ResponseWriter
 	status      int

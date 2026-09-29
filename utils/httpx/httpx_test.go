@@ -11,10 +11,11 @@ import (
 )
 
 func TestRespondJSON(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name          string
 		status        int
-		payload       interface{}
+		payload       any
 		expectedBody  string
 		setup         func() *http.Request
 		expectedCode  int
@@ -86,21 +87,21 @@ func TestRespondJSON(t *testing.T) {
 				t.Errorf("expected status %d, got %d", test.expectedCode, result.StatusCode)
 			}
 
-			body, err := io.ReadAll(result.Body)
-			if err != nil {
-				t.Fatalf("unexpected error while reading body: %v", err)
+			bodyBytes, readErr := io.ReadAll(result.Body)
+			if readErr != nil {
+				t.Fatalf("unexpected error while reading body: %v", readErr)
 			}
 
-			if !json.Valid([]byte(test.expectedBody)) && string(body) != test.expectedBody {
-				t.Errorf("expected body %q, got %q", test.expectedBody, body)
+			if !json.Valid([]byte(test.expectedBody)) && string(bodyBytes) != test.expectedBody {
+				t.Errorf("expected body %q, got %q", test.expectedBody, bodyBytes)
 			} else if json.Valid([]byte(test.expectedBody)) {
-				expBody := make(map[string]interface{})
-				gotBody := make(map[string]interface{})
-				if err := json.Unmarshal([]byte(test.expectedBody), &expBody); err != nil {
-					t.Fatalf("failed to parse expected body: %v", err)
+				expBody := make(map[string]any)
+				gotBody := make(map[string]any)
+				if unmarshalErr := json.Unmarshal([]byte(test.expectedBody), &expBody); unmarshalErr != nil {
+					t.Fatalf("failed to parse expected body: %v", unmarshalErr)
 				}
-				if err := json.Unmarshal(body, &gotBody); err != nil {
-					t.Fatalf("failed to parse body: %v", err)
+				if unmarshalErr := json.Unmarshal(bodyBytes, &gotBody); unmarshalErr != nil {
+					t.Fatalf("failed to parse body: %v", unmarshalErr)
 				}
 				if !equals(expBody, gotBody) {
 					t.Errorf("expected body %v, got %v", expBody, gotBody)
@@ -111,6 +112,7 @@ func TestRespondJSON(t *testing.T) {
 }
 
 func TestDecodeJSON(t *testing.T) {
+	t.Parallel()
 	type testStruct struct {
 		Name  string `json:"name"`
 		Value int    `json:"value"`
@@ -120,8 +122,8 @@ func TestDecodeJSON(t *testing.T) {
 		name          string
 		contentType   string
 		body          string
-		target        interface{}
-		expected      interface{}
+		target        any
+		expected      any
 		expectedBody  string
 		expectError   bool
 		errorContains string
@@ -226,6 +228,7 @@ func TestDecodeJSON(t *testing.T) {
 
 type closeTracker struct {
 	io.Reader
+
 	closed bool
 }
 
@@ -235,6 +238,7 @@ func (c *closeTracker) Close() error {
 }
 
 func TestDecodeJSONClosesBody(t *testing.T) {
+	t.Parallel()
 	body := &closeTracker{Reader: strings.NewReader(`{"name":"test"}`)}
 	req := httptest.NewRequest(http.MethodPost, "/", body)
 	req.Header.Set("Content-Type", "application/json")
@@ -254,7 +258,7 @@ func contains(s, substr string) bool {
 	return s != "" && substr != "" && s != substr && len(s) > len(substr) && s[0:len(substr)] == substr
 }
 
-func equals(expected, actual map[string]interface{}) bool {
+func equals(expected, actual map[string]any) bool {
 	for key, value := range expected {
 		if actual[key] != value {
 			return false

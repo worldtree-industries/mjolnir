@@ -5,6 +5,7 @@ import (
 )
 
 func TestNew(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		value    any
@@ -96,6 +97,7 @@ func TestNew(t *testing.T) {
 }
 
 func TestSome(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		value    any
@@ -147,6 +149,7 @@ func TestSome(t *testing.T) {
 }
 
 func TestEmpty(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		typeStr string
@@ -203,6 +206,7 @@ func TestEmpty(t *testing.T) {
 }
 
 func TestIsEmpty(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		option   func() Option[string]
@@ -236,6 +240,7 @@ func TestIsEmpty(t *testing.T) {
 }
 
 func TestGet(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		option   func() Option[int]

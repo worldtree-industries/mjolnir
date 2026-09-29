@@ -6,6 +6,7 @@ import (
 )
 
 func TestSet_New(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		items    []int
@@ -35,12 +36,13 @@ func TestSet_New(t *testing.T) {
 }
 
 func TestSet_Add(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
-		name           string
-		initial        []int
-		add            []int
-		expectedLen    int
-		expectedItems  []int
+		name          string
+		initial       []int
+		add           []int
+		expectedLen   int
+		expectedItems []int
 	}{
 		{"add to empty set", []int{}, []int{1}, 1, []int{1}},
 		{"add duplicate", []int{1}, []int{1}, 1, []int{1}},
@@ -69,12 +71,13 @@ func TestSet_Add(t *testing.T) {
 }
 
 func TestSet_Remove(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
-		name          string
-		initial       []int
-		remove        []int
-		expectedLen   int
-		shouldContain []int
+		name             string
+		initial          []int
+		remove           []int
+		expectedLen      int
+		shouldContain    []int
 		shouldNotContain []int
 	}{
 		{"remove existing item", []int{1, 2, 3}, []int{2}, 2, []int{1, 3}, []int{2}},
@@ -111,6 +114,7 @@ func TestSet_Remove(t *testing.T) {
 }
 
 func TestSet_Contains(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		items    []int
@@ -136,6 +140,7 @@ func TestSet_Contains(t *testing.T) {
 }
 
 func TestSet_Len(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		items    []int
@@ -159,6 +164,7 @@ func TestSet_Len(t *testing.T) {
 }
 
 func TestSet_Items(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		items    []int
@@ -194,6 +200,7 @@ func TestSet_Items(t *testing.T) {
 }
 
 func TestSet_Union(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		set1     []int
@@ -237,6 +244,7 @@ func TestSet_Union(t *testing.T) {
 }
 
 func TestSet_Intersection(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		set1     []int
@@ -281,6 +289,7 @@ func TestSet_Intersection(t *testing.T) {
 }
 
 func TestSet_Difference(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		set1     []int
@@ -325,6 +334,7 @@ func TestSet_Difference(t *testing.T) {
 }
 
 func TestSet_SymmetricDifference(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		set1     []int
@@ -368,6 +378,7 @@ func TestSet_SymmetricDifference(t *testing.T) {
 }
 
 func TestSet_GenericString(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name      string
 		operation string
@@ -376,13 +387,31 @@ func TestSet_GenericString(t *testing.T) {
 		expected  []string
 	}{
 		{"union no overlap", "union", []string{"a", "b"}, []string{"c", "d"}, []string{"a", "b", "c", "d"}},
-		{"union with overlap", "union", []string{"a", "b", "c"}, []string{"c", "d", "e"}, []string{"a", "b", "c", "d", "e"}},
+		{
+			"union with overlap",
+			"union",
+			[]string{"a", "b", "c"},
+			[]string{"c", "d", "e"},
+			[]string{"a", "b", "c", "d", "e"},
+		},
 		{"intersection with overlap", "intersection", []string{"a", "b", "c"}, []string{"c", "d", "e"}, []string{"c"}},
 		{"intersection no overlap", "intersection", []string{"a", "b"}, []string{"c", "d"}, []string{}},
 		{"difference with overlap", "difference", []string{"a", "b", "c"}, []string{"c", "d", "e"}, []string{"a", "b"}},
 		{"difference no overlap", "difference", []string{"a", "b"}, []string{"c", "d"}, []string{"a", "b"}},
-		{"symmetric difference with overlap", "symmetric_difference", []string{"a", "b", "c"}, []string{"c", "d", "e"}, []string{"a", "b", "d", "e"}},
-		{"symmetric difference no overlap", "symmetric_difference", []string{"a", "b"}, []string{"c", "d"}, []string{"a", "b", "c", "d"}},
+		{
+			"symmetric difference with overlap",
+			"symmetric_difference",
+			[]string{"a", "b", "c"},
+			[]string{"c", "d", "e"},
+			[]string{"a", "b", "d", "e"},
+		},
+		{
+			"symmetric difference no overlap",
+			"symmetric_difference",
+			[]string{"a", "b"},
+			[]string{"c", "d"},
+			[]string{"a", "b", "c", "d"},
+		},
 	}
 
 	for _, tt := range tests {
@@ -416,6 +445,7 @@ func TestSet_GenericString(t *testing.T) {
 }
 
 func TestSet_GenericStruct(t *testing.T) {
+	t.Parallel()
 	type Point struct {
 		X, Y int
 	}
@@ -449,6 +479,7 @@ func TestSet_GenericStruct(t *testing.T) {
 }
 
 func TestSet_OperationChaining(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		set1     []int
@@ -499,16 +530,17 @@ func TestSet_OperationChaining(t *testing.T) {
 }
 
 func TestSet_InterfaceCompliance(t *testing.T) {
-	var _ Set[int] = New[int]()
-	var _ Set[string] = New[string]()
-	var _ Set[bool] = New[bool]()
+	t.Parallel()
+	var _ = New[int]()
+	var _ = New[string]()
+	var _ = New[bool]()
 }
 
-// Benchmark tests
+// Benchmark tests.
 func BenchmarkSetAdd(b *testing.B) {
 	s := New[int]()
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for i := range b.N {
 		s.Add(i)
 	}
 }
@@ -519,7 +551,7 @@ func BenchmarkSetContains(b *testing.B) {
 		s.Add(i)
 	}
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for i := range b.N {
 		s.Contains(i % 1000)
 	}
 }
@@ -532,7 +564,7 @@ func BenchmarkSetUnion(b *testing.B) {
 		s2.Add(i + 250) // 50% overlap
 	}
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		s1.Union(s2)
 	}
 }
@@ -545,7 +577,7 @@ func BenchmarkSetIntersection(b *testing.B) {
 		s2.Add(i + 250)
 	}
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		s1.Intersection(s2)
 	}
 }
@@ -558,7 +590,7 @@ func BenchmarkSetDifference(b *testing.B) {
 		s2.Add(i + 250)
 	}
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		s1.Difference(s2)
 	}
 }

@@ -2,58 +2,60 @@ package errorx
 
 import (
 	"encoding/json"
-	"github.com/dfryer1193/mjolnir/middleware"
-	"github.com/rs/zerolog/log"
 	"net/http"
+
+	"github.com/rs/zerolog/log"
+
+	"github.com/dfryer1193/mjolnir/middleware"
 )
 
-type ErrorReturningHandler func(w http.ResponseWriter, r *http.Request) *ApiError
+type ErrorReturningHandler func(w http.ResponseWriter, r *http.Request) *APIError
 
 type ErrorResponse struct {
 	Error string `json:"error"`
 	Code  int    `json:"code"`
 }
-type ApiError struct {
+type APIError struct {
 	err  error
 	code int
 }
 
-func (e *ApiError) Error() string {
+func NewAPIError(err error, code int) *APIError {
+	return &APIError{
+		err:  err,
+		code: code,
+	}
+}
+
+func (e *APIError) Error() string {
 	return e.err.Error()
 }
 
-func (e *ApiError) asErrorResponse() ErrorResponse {
+func (e *APIError) asErrorResponse() ErrorResponse {
 	return ErrorResponse{
 		Error: e.err.Error(),
 		Code:  e.code,
 	}
 }
 
-func InternalServerErr(err error) *ApiError {
-	return &ApiError{
+func InternalServerErr(err error) *APIError {
+	return &APIError{
 		err:  err,
 		code: http.StatusInternalServerError,
 	}
 }
 
-func BadRequestErr(err error) *ApiError {
-	return &ApiError{
+func BadRequestErr(err error) *APIError {
+	return &APIError{
 		err:  err,
 		code: http.StatusBadRequest,
 	}
 }
 
-func UnauthorizedErr(err error) *ApiError {
-	return &ApiError{
+func UnauthorizedErr(err error) *APIError {
+	return &APIError{
 		err:  err,
 		code: http.StatusUnauthorized,
-	}
-}
-
-func NewApiError(err error, code int) *ApiError {
-	return &ApiError{
-		err:  err,
-		code: code,
 	}
 }
 
@@ -65,7 +67,7 @@ func ErrorHandler(h ErrorReturningHandler) http.HandlerFunc {
 	}
 }
 
-func handleError(w http.ResponseWriter, r *http.Request, reqErr *ApiError) {
+func handleError(w http.ResponseWriter, r *http.Request, reqErr *APIError) {
 	if reqErr != nil {
 		w.Header().Set("Content-Type", "application/json")
 		encoder := json.NewEncoder(w)
@@ -79,7 +81,7 @@ func handleError(w http.ResponseWriter, r *http.Request, reqErr *ApiError) {
 				Msg("internal server error occurred")
 
 			w.WriteHeader(reqErr.code)
-			encoder.Encode(ErrorResponse{
+			_ = encoder.Encode(ErrorResponse{
 				Error: "Internal Server Error",
 				Code:  http.StatusInternalServerError,
 			})
@@ -87,6 +89,6 @@ func handleError(w http.ResponseWriter, r *http.Request, reqErr *ApiError) {
 		}
 
 		w.WriteHeader(reqErr.code)
-		encoder.Encode(reqErr.asErrorResponse())
+		_ = encoder.Encode(reqErr.asErrorResponse())
 	}
 }
