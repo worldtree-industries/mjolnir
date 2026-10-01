@@ -1,0 +1,29 @@
+## Destination
+
+A production-ready Go development framework that combines observability (structured logging, correlation IDs), HTTP service configuration, and database primitives (connection pooling, transaction management, schema migrations). The framework should be opinionated about defaults but extensible.
+
+## Notes
+
+- Core domain: logging (zerolog), HTTP routing (chi), middleware (request ID, request logging), JSON API handling
+- Missing: database connection primitives, transaction management (unit/serializable TX), schema migration tooling
+- Scope: the framework itself, not individual app implementations
+
+## Decisions so far
+
+- [Database pooling patterns (pgx vs sql.DB)](https://github.com/worldtree-industries/mjolnir/issues/7): pgx-native pool with sql.DB-compatible wrapper; defaults min=5/max=25/timeout 30s
+- [DB config primitive](https://github.com/worldtree-industries/mjolnir/issues/8): `db.Config` struct with pgx pool integration; defaults 5/25/30s/5m/30m; initial + ongoing healthchecks
+- [Transaction management](https://github.com/worldtree-industries/mjolnir/issues/9): context-bound TxManager (`InTx`) with auto-rollback; tx stored in context, repo extracts via `getExec(ctx)`
+- [Schema migration system](https://github.com/worldtree-industries/mjolnir/issues/10): goose migration tool; versioned SQL files, forward-only, manual CLI (`goose up/down/status`)
+- [Config loading primitive](https://github.com/worldtree-industries/mjolnir/issues/12): flat struct config, singleton, JSON defaults, log & fail if no sane default
+- [ApiError type](https://github.com/worldtree-industries/mjolnir/issues/13): embeds error, HTTP status code, stack trace in logs only, 4XX explainer text, Details map
+- [Retry wrapper](https://github.com/worldtree-industries/mjolnir/issues/14): exponential backoff with jitter, configurable by type, standalone retry.Do
+- [Logging improvements](https://github.com/worldtree-industries/mjolnir/issues/15): auto context propagation via middleware, logger factory, hardcoded redaction, middleware-only
+
+## Not yet specified
+
+
+## Out of scope
+
+- Specific application business logic (order processing, user management, etc.)
+- Frontend/UI concerns
+- External service integrations beyond the framework's own abstractions
