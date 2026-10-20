@@ -9,9 +9,10 @@ import (
 var ErrNilValue = errors.New("optional: value is nil")
 
 // Option is a container for a value that may be absent. It is intended for
-// value types. A present Option never holds a nil pointer: pointer payloads
-// enter through OfPtr, which rejects nil. The zero value of Option[T] is an
-// empty Option.
+// value types. Pointer payloads should enter through OfPtr, which rejects
+// nil; Of instantiated with a pointer or interface type holds the value as
+// given, the same exposure as a bare Go pointer. The zero value of
+// Option[T] is an empty Option.
 //
 // See docs/adr/0002-option-explicit-presence.md.
 type Option[T any] struct {
@@ -20,8 +21,8 @@ type Option[T any] struct {
 }
 
 // Of returns a present Option holding value. It is unconditional: value
-// types — the intended use — have no nil to check. Pointer payloads enter
-// through OfPtr, which rejects nil pointers.
+// types — the intended use — have no nil to check. Pointer payloads should
+// enter through OfPtr, which rejects nil pointers.
 func Of[T any](value T) Option[T] {
 	return Option[T]{value: value, present: true}
 }

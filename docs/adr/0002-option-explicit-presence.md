@@ -60,10 +60,10 @@ error convention for construction:
 
 - Empty access can no longer yield a silent zero value; absence is explicit at every
   call site, and the test suite is rewritten against the new contract.
-- `OfPtr` callers handle a returned error. `Option[*T]` remains expressible via
-  plain `Of` for non-nil pointer payloads; nil pointers enter only through
-  `OfPtr`, which rejects them. `Map`'s function must not return a nil pointer
-  (documented contract).
+- `OfPtr` callers handle a returned error. The nil check applies only to the
+  `OfPtr` path: `Of` instantiated with a pointer or interface type holds the
+  nil as a present payload, the same exposure as a bare Go pointer. `Map`'s
+  function must not return a nil pointer (documented contract).
 - `Map` carries its own type parameter, making it a generic method, which requires
   the go1.27 language level. The module's `go` directive moves 1.25.0 → 1.27.0 and
   CI's Go version moves 1.23 → 1.27; consumers must build with Go ≥ 1.27.
