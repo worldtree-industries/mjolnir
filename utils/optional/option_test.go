@@ -100,10 +100,18 @@ func TestMap(t *testing.T) {
 		}
 	})
 
-	t.Run("empty stays empty through Map", func(t *testing.T) {
+	t.Run("empty stays empty through Map without calling the function", func(t *testing.T) {
 		t.Parallel()
-		if v, ok := Empty[int]().Map(func(i int) int { return i + 1 }).Get(); ok || v != 0 {
+		called := false
+		v, ok := Empty[int]().Map(func(i int) int {
+			called = true
+			return i + 1
+		}).Get()
+		if ok || v != 0 {
 			t.Errorf("Empty[int]().Map(f).Get() = (%d, %v), want (0, false)", v, ok)
+		}
+		if called {
+			t.Error("Map called the function on an empty Option, want not called")
 		}
 	})
 }
@@ -125,10 +133,18 @@ func TestFilter(t *testing.T) {
 		}
 	})
 
-	t.Run("empty stays empty through Filter", func(t *testing.T) {
+	t.Run("empty stays empty through Filter without calling the predicate", func(t *testing.T) {
 		t.Parallel()
-		if v, ok := Empty[int]().Filter(func(i int) bool { return true }).Get(); ok || v != 0 {
+		called := false
+		v, ok := Empty[int]().Filter(func(i int) bool {
+			called = true
+			return true
+		}).Get()
+		if ok || v != 0 {
 			t.Errorf("Empty[int]().Filter(f).Get() = (%d, %v), want (0, false)", v, ok)
+		}
+		if called {
+			t.Error("Filter called the predicate on an empty Option, want not called")
 		}
 	})
 }

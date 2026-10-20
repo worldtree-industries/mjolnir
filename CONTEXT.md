@@ -58,3 +58,4 @@ Context is the set of data that travels with a log event to enable correlation a
 - **API**: factory creates named loggers: New(name string)
 - **Human-readable stream**: all levels (not just WARN+)
 - **ADR-0001**: decision to use zerolog (not slog), hard-to-reverse
+- **ADR-0002**: Option[T] redesigned around explicit presence (comma-ok `Get()`), module floor go1.27
