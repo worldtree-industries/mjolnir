@@ -1,6 +1,7 @@
 package optional
 
 import (
+	"errors"
 	"testing"
 )
 
@@ -35,20 +36,75 @@ func TestOf(t *testing.T) {
 		}
 	})
 
-	t.Run("present may hold a nil pointer", func(t *testing.T) {
+	t.Run("present holds a non-nil pointer", func(t *testing.T) {
 		t.Parallel()
-		v, ok := Of[*string](nil).Get()
-		if !ok {
-			t.Fatal("Of[*string](nil) is empty, want present")
+		s := "value"
+		v, ok := Of(&s).Get()
+		if !ok || v == nil || *v != "value" {
+			t.Errorf("Of(&s).Get() = (%v, %v), want (&\"value\", true)", v, ok)
 		}
-		if v != nil {
-			t.Errorf("Of[*string](nil).Get() = %v, want nil", v)
+	})
+
+	t.Run("present holds a nil map", func(t *testing.T) {
+		t.Parallel()
+		v, ok := Of(map[string]int(nil)).Get()
+		if !ok || v != nil {
+			t.Errorf("Of(nil map).Get() = (%v, %v), want (nil, true)", v, ok)
+		}
+	})
+}
+
+func TestOfPtr(t *testing.T) {
+	t.Parallel()
+
+	t.Run("non-nil pointer yields the dereferenced value", func(t *testing.T) {
+		t.Parallel()
+		i := 42
+		opt, err := OfPtr[int, *int](&i)
+		if err != nil {
+			t.Fatalf("OfPtr(&42) error = %v, want nil", err)
+		}
+		if v, ok := opt.Get(); !ok || v != 42 {
+			t.Errorf("OfPtr(&42).Get() = (%d, %v), want (42, true)", v, ok)
+		}
+	})
+
+	t.Run("nil pointer returns ErrNilValue", func(t *testing.T) {
+		t.Parallel()
+		opt, err := OfPtr[int, *int](nil)
+		if !errors.Is(err, ErrNilValue) {
+			t.Fatalf("OfPtr(nil) error = %v, want ErrNilValue", err)
+		}
+		if opt.IsPresent() {
+			t.Error("OfPtr(nil) is present, want empty")
+		}
+	})
+
+	t.Run("nil *string returns ErrNilValue", func(t *testing.T) {
+		t.Parallel()
+		opt, err := OfPtr[string, *string](nil)
+		if !errors.Is(err, ErrNilValue) {
+			t.Fatalf("OfPtr[string, *string](nil) error = %v, want ErrNilValue", err)
+		}
+		if opt.IsPresent() {
+			t.Error("OfPtr[string, *string](nil) is present, want empty")
 		}
 	})
 }
 
 func TestEmpty(t *testing.T) {
 	t.Parallel()
+
+	t.Run("zero value of Option is empty", func(t *testing.T) {
+		t.Parallel()
+		var opt Option[string]
+		if opt.IsPresent() {
+			t.Error("zero Option[string] is present, want empty")
+		}
+		if v, ok := opt.Get(); ok || v != "" {
+			t.Errorf("zero Option[string].Get() = (%q, %v), want (\"\", false)", v, ok)
+		}
+	})
 
 	t.Run("empty holds no string value", func(t *testing.T) {
 		t.Parallel()

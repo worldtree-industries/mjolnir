@@ -45,7 +45,7 @@ Context is the set of data that travels with a log event to enable correlation a
 | **Span ID** | Identifier for a specific operation within a trace |
 | **Redaction** | Automatic masking of sensitive data in log messages |
 | **Option** | A container for a value that may be absent |
-| **Present** | An Option holding a value (including a nil pointer) |
+| **Present** | An Option holding a value (never a nil pointer) |
 | **Empty** | An Option holding no value |
 
 ## Design Decisions

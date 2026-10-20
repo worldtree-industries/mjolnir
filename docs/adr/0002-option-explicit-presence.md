@@ -19,25 +19,40 @@ redundancy (`New` and `Some` were identical constructors). The redesign was eval
 against the Java `Optional` API (`of` / `ofNullable` / `orElse` / ...), which the
 maintainers initially proposed porting.
 
+A design review of the initial implementation revised the nil contract: a present
+Option should never hold a nil pointer, and the type is intended for value types.
+A follow-up review dropped the reflection-based nil check (constructor cost) and
+narrowed the check to nil pointers — the only case that must be rejected.
+
 ## Decision
 
-Presence is explicit at every call site, using Go's comma-ok idiom rather than
-Java's exception-based strictness:
+Presence is explicit at every call site, using Go's comma-ok idiom for access and Go's
+error convention for construction:
 
-- `Of[T any](val T) Option[T]` — unconditional; always present. A present option may
-  legally hold a nil pointer, and value types have no nil, so Java's `of()` NPE guard
-  has no invariant to defend here and was dropped (no error return, no panic).
+- `Of[T any](val T) Option[T]` — unconditional. Intended for value types, which
+  have no nil to check.
+- `OfPtr[T any, P ~*T](p P) (Option[T], error)` — present holding `*p`, or
+  `ErrNilValue` when `p` is nil. This is Java's `of()` NPE guard translated to
+  Go's error convention, placed where the pointer type is known at compile time:
+  Go cannot check a generic `T` for nil (no `== nil` comparison for unconstrained
+  type parameters, no standard method on `*T`), and a reflection-based check was
+  dropped as too slow; `p == nil` under `P ~*T` is the reflection-free check.
 - `Empty[T any]() Option[T]` — absent.
 - `Get() (T, bool)` — comma-ok access; replaces the silent zero-value `Get() T`.
 - `IsPresent() bool` — replaces `IsEmpty()`.
+- The zero value of `Option[T]` is an empty Option, so an uninitialized variable is
+  absent rather than present-holding-a-zero.
 - Companions: `Map`, `Filter`, `OrElse` (eager default), `OrGet` (lazy default) —
   Java's `map` / `filter` / `orElse` / `orElseGet`. Accepted over a minimal
-  comma-ok-only surface: the library ships its convenience surface once.
+  comma-ok-only surface: the library ships its convenience surface once. `Map`
+  applies `f` to the present value; `f` must not return a nil pointer (the same
+  language limit: a generic result type cannot be nil-checked without reflection).
 - `New` and `Some` removed (redundant constructors); `IsEmpty` removed (replaced by
   `IsPresent`).
-- `OfNullable[T, P ~*T]` was considered and dropped: no pointer-means-unset flow
-  exists in this framework yet — producers decide presence. It remains an additive
-  candidate for when such a flow appears.
+- `OfNullable[T, P ~*T]` (nil → empty) was dropped: it would treat a nil pointer
+  as a silent success, which the nil contract forbids. The `*T` entry point that
+  survived the nil-contract review is `OfPtr` above: same shape, but nil is an
+  error, not an empty.
 - `FlatMap` and `IfPresent` omitted: redundant with comma-ok at call sites; add when
   a concrete consumer needs them.
 
@@ -45,6 +60,10 @@ Java's exception-based strictness:
 
 - Empty access can no longer yield a silent zero value; absence is explicit at every
   call site, and the test suite is rewritten against the new contract.
+- `OfPtr` callers handle a returned error. `Option[*T]` remains expressible via
+  plain `Of` for non-nil pointer payloads; nil pointers enter only through
+  `OfPtr`, which rejects them. `Map`'s function must not return a nil pointer
+  (documented contract).
 - `Map` carries its own type parameter, making it a generic method, which requires
   the go1.27 language level. The module's `go` directive moves 1.25.0 → 1.27.0 and
   CI's Go version moves 1.23 → 1.27; consumers must build with Go ≥ 1.27.
