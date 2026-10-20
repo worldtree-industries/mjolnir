@@ -2,17 +2,16 @@ package optional
 
 import (
 	"errors"
+	"reflect"
 )
 
-// ErrNilValue is returned by OfPtr when the pointer is nil. A present Option
-// never holds a nil pointer.
+// ErrNilValue is returned by Of when the value is a nil pointer, map, slice,
+// channel, function, or interface. A present Option never holds a nil.
 var ErrNilValue = errors.New("optional: value is nil")
 
 // Option is a container for a value that may be absent. It is intended for
-// value types. Pointer payloads should enter through OfPtr, which rejects
-// nil; Of instantiated with a pointer or interface type holds the value as
-// given, the same exposure as a bare Go pointer. The zero value of
-// Option[T] is an empty Option.
+// value types. A present Option never holds a nil: Of rejects nil values
+// with ErrNilValue. The zero value of Option[T] is an empty Option.
 //
 // See docs/adr/0002-option-explicit-presence.md.
 type Option[T any] struct {
@@ -20,22 +19,35 @@ type Option[T any] struct {
 	present bool
 }
 
-// Of returns a present Option holding value. It is unconditional: value
-// types — the intended use — have no nil to check. Pointer payloads should
-// enter through OfPtr, which rejects nil pointers.
-func Of[T any](value T) Option[T] {
-	return Option[T]{value: value, present: true}
-}
-
-// OfPtr returns a present Option holding *p. It returns ErrNilValue when p
-// is nil: a present Option never holds a nil pointer. Go cannot check a
-// generic T for nil, so the check lives here, where the pointer type is
-// known at compile time and p == nil is a plain comparison.
-func OfPtr[T any, P ~*T](p P) (Option[T], error) {
-	if p == nil {
+// Of returns a present Option holding value. It returns ErrNilValue when
+// value is a nil pointer, map, slice, channel, function, or interface: a
+// present Option never holds a nil. For value types — the intended use —
+// the error never occurs.
+func Of[T any](value T) (Option[T], error) {
+	if isNil(value) {
 		return Empty[T](), ErrNilValue
 	}
-	return Option[T]{value: *p, present: true}, nil
+	return Option[T]{value: value, present: true}, nil
+}
+
+// isNil reports whether v is a nil pointer, map, slice, channel, function,
+// or interface. Value types have no nil, so it is always false for them.
+func isNil(v any) bool {
+	if v == nil { // a fully nil interface
+		return true
+	}
+	rv := reflect.ValueOf(v)
+	switch rv.Kind() {
+	case reflect.Pointer, reflect.Map, reflect.Slice, reflect.Chan, reflect.Func, reflect.Interface:
+		return rv.IsNil()
+	case reflect.Invalid, // unreachable: a nil interface is caught above
+		reflect.Bool, reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr,
+		reflect.Float32, reflect.Float64, reflect.Complex64, reflect.Complex128,
+		reflect.String, reflect.UnsafePointer, reflect.Array, reflect.Struct:
+		return false
+	}
+	return false
 }
 
 // Empty returns an absent Option.
@@ -55,13 +67,17 @@ func (o Option[T]) Get() (T, bool) {
 }
 
 // Map returns an Option holding f(value) when o is present, and an empty
-// Option when o is empty. f is not called on an empty Option. f must not
-// return a nil pointer.
+// Option when o is empty. f is not called on an empty Option. If f returns
+// a nil, the result is an empty Option.
 func (o Option[T]) Map[U any](f func(T) U) Option[U] {
 	if !o.present {
 		return Empty[U]()
 	}
-	return Of(f(o.value))
+	result, err := Of(f(o.value))
+	if err != nil {
+		return Empty[U]()
+	}
+	return result
 }
 
 // Filter returns o unchanged when it is present and f(value) is true, and an

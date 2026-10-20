@@ -20,23 +20,28 @@ against the Java `Optional` API (`of` / `ofNullable` / `orElse` / ...), which th
 maintainers initially proposed porting.
 
 A design review of the initial implementation revised the nil contract: a present
-Option should never hold a nil pointer, and the type is intended for value types.
-A follow-up review dropped the reflection-based nil check (constructor cost) and
-narrowed the check to nil pointers — the only case that must be rejected.
+Option should never hold a nil, and the type is intended for value types. The
+check runs in `Of` itself, via reflection — the only mechanism that works for a
+generic `T` (no `== nil` comparison for unconstrained type parameters, no
+standard method on `*T`). A split design (unconditional `Of` plus a checked
+`OfPtr[T, P ~*T]`) was rejected: it left `Of[*T](nil)` as an unchecked bypass of
+the contract. The reflection check was accepted after measurement: ~4 ns per
+call, zero allocations.
 
 ## Decision
 
 Presence is explicit at every call site, using Go's comma-ok idiom for access and Go's
 error convention for construction:
 
-- `Of[T any](val T) Option[T]` — unconditional. Intended for value types, which
-  have no nil to check.
-- `OfPtr[T any, P ~*T](p P) (Option[T], error)` — present holding `*p`, or
-  `ErrNilValue` when `p` is nil. This is Java's `of()` NPE guard translated to
-  Go's error convention, placed where the pointer type is known at compile time:
-  Go cannot check a generic `T` for nil (no `== nil` comparison for unconstrained
-  type parameters, no standard method on `*T`), and a reflection-based check was
-  dropped as too slow; `p == nil` under `P ~*T` is the reflection-free check.
+- `Of[T any](val T) (Option[T], error)` — present, or `ErrNilValue` when value is
+  a nil pointer, map, slice, channel, function, or interface: a present Option
+  never holds a nil. This is Java's `of()` NPE guard translated to Go's error
+  convention. For value types — the intended `T` — the error never occurs; the
+  check costs ~4 ns and no allocations (measured).
+- A checked two-type-parameter constructor (`OfPtr[T, P ~*T]`, using the
+  reflection-free `p == nil`) was the rejected alternative: the split left plain
+  `Of[*T](nil)` as an unchecked bypass of the nil contract, and the measured
+  cost did not justify a second constructor.
 - `Empty[T any]() Option[T]` — absent.
 - `Get() (T, bool)` — comma-ok access; replaces the silent zero-value `Get() T`.
 - `IsPresent() bool` — replaces `IsEmpty()`.
@@ -45,8 +50,8 @@ error convention for construction:
 - Companions: `Map`, `Filter`, `OrElse` (eager default), `OrGet` (lazy default) —
   Java's `map` / `filter` / `orElse` / `orElseGet`. Accepted over a minimal
   comma-ok-only surface: the library ships its convenience surface once. `Map`
-  applies `f` to the present value; `f` must not return a nil pointer (the same
-  language limit: a generic result type cannot be nil-checked without reflection).
+  applies `f` to the present value; if `f` returns a nil, the result is an empty
+  Option (Java's `Optional.map` null→empty semantics, via `Of`'s check).
 - `New` and `Some` removed (redundant constructors); `IsEmpty` removed (replaced by
   `IsPresent`).
 - `OfNullable[T, P ~*T]` (nil → empty) was dropped: it would treat a nil pointer
@@ -60,10 +65,10 @@ error convention for construction:
 
 - Empty access can no longer yield a silent zero value; absence is explicit at every
   call site, and the test suite is rewritten against the new contract.
-- `OfPtr` callers handle a returned error. The nil check applies only to the
-  `OfPtr` path: `Of` instantiated with a pointer or interface type holds the
-  nil as a present payload, the same exposure as a bare Go pointer. `Map`'s
-  function must not return a nil pointer (documented contract).
+- `Of` callers handle a returned error. The nil check runs on every `Of` call
+  (~4 ns, zero allocations, measured); the invariant holds on every path — there
+  is no unchecked constructor. `Map` yields an empty Option when its function
+  returns a nil.
 - `Map` carries its own type parameter, making it a generic method, which requires
   the go1.27 language level. The module's `go` directive moves 1.25.0 → 1.27.0 and
   CI's Go version moves 1.23 → 1.27; consumers must build with Go ≥ 1.27.

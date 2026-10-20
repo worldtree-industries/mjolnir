@@ -10,28 +10,44 @@ func TestOf(t *testing.T) {
 
 	t.Run("present holds the given value", func(t *testing.T) {
 		t.Parallel()
-		if v, ok := Of("hello").Get(); !ok || v != "hello" {
+		opt, err := Of("hello")
+		if err != nil {
+			t.Fatalf("Of(\"hello\") error = %v, want nil", err)
+		}
+		if v, ok := opt.Get(); !ok || v != "hello" {
 			t.Errorf("Of(\"hello\").Get() = (%q, %v), want (\"hello\", true)", v, ok)
 		}
 	})
 
 	t.Run("present holds the zero value of int", func(t *testing.T) {
 		t.Parallel()
-		if v, ok := Of(0).Get(); !ok || v != 0 {
+		opt, err := Of(0)
+		if err != nil {
+			t.Fatalf("Of(0) error = %v, want nil", err)
+		}
+		if v, ok := opt.Get(); !ok || v != 0 {
 			t.Errorf("Of(0).Get() = (%d, %v), want (0, true)", v, ok)
 		}
 	})
 
 	t.Run("present holds the empty string", func(t *testing.T) {
 		t.Parallel()
-		if v, ok := Of("").Get(); !ok || v != "" {
+		opt, err := Of("")
+		if err != nil {
+			t.Fatalf("Of(\"\") error = %v, want nil", err)
+		}
+		if v, ok := opt.Get(); !ok || v != "" {
 			t.Errorf("Of(\"\").Get() = (%q, %v), want (\"\", true)", v, ok)
 		}
 	})
 
 	t.Run("present holds false", func(t *testing.T) {
 		t.Parallel()
-		if v, ok := Of(false).Get(); !ok || v != false {
+		opt, err := Of(false)
+		if err != nil {
+			t.Fatalf("Of(false) error = %v, want nil", err)
+		}
+		if v, ok := opt.Get(); !ok || v != false {
 			t.Errorf("Of(false).Get() = (%v, %v), want (false, true)", v, ok)
 		}
 	})
@@ -39,55 +55,36 @@ func TestOf(t *testing.T) {
 	t.Run("present holds a non-nil pointer", func(t *testing.T) {
 		t.Parallel()
 		s := "value"
-		v, ok := Of(&s).Get()
+		opt, err := Of(&s)
+		if err != nil {
+			t.Fatalf("Of(&s) error = %v, want nil", err)
+		}
+		v, ok := opt.Get()
 		if !ok || v == nil || *v != "value" {
 			t.Errorf("Of(&s).Get() = (%v, %v), want (&\"value\", true)", v, ok)
 		}
 	})
 
-	t.Run("present holds a nil map", func(t *testing.T) {
+	t.Run("nil values return ErrNilValue and an empty option", func(t *testing.T) {
 		t.Parallel()
-		v, ok := Of(map[string]int(nil)).Get()
-		if !ok || v != nil {
-			t.Errorf("Of(nil map).Get() = (%v, %v), want (nil, true)", v, ok)
-		}
-	})
-}
 
-func TestOfPtr(t *testing.T) {
-	t.Parallel()
-
-	t.Run("non-nil pointer yields the dereferenced value", func(t *testing.T) {
-		t.Parallel()
-		i := 42
-		opt, err := OfPtr[int, *int](&i)
-		if err != nil {
-			t.Fatalf("OfPtr(&42) error = %v, want nil", err)
+		if opt, err := Of[*string](nil); !errors.Is(err, ErrNilValue) || opt.IsPresent() {
+			t.Errorf("Of[*string](nil) = (%v, %v), want (empty, ErrNilValue)", opt.IsPresent(), err)
 		}
-		if v, ok := opt.Get(); !ok || v != 42 {
-			t.Errorf("OfPtr(&42).Get() = (%d, %v), want (42, true)", v, ok)
+		if opt, err := Of[map[string]int](nil); !errors.Is(err, ErrNilValue) || opt.IsPresent() {
+			t.Errorf("Of[map](nil) = (%v, %v), want (empty, ErrNilValue)", opt.IsPresent(), err)
 		}
-	})
-
-	t.Run("nil pointer returns ErrNilValue", func(t *testing.T) {
-		t.Parallel()
-		opt, err := OfPtr[int, *int](nil)
-		if !errors.Is(err, ErrNilValue) {
-			t.Fatalf("OfPtr(nil) error = %v, want ErrNilValue", err)
+		if opt, err := Of[[]int](nil); !errors.Is(err, ErrNilValue) || opt.IsPresent() {
+			t.Errorf("Of[[]int](nil) = (%v, %v), want (empty, ErrNilValue)", opt.IsPresent(), err)
 		}
-		if opt.IsPresent() {
-			t.Error("OfPtr(nil) is present, want empty")
+		if opt, err := Of[chan int](nil); !errors.Is(err, ErrNilValue) || opt.IsPresent() {
+			t.Errorf("Of[chan int](nil) = (%v, %v), want (empty, ErrNilValue)", opt.IsPresent(), err)
 		}
-	})
-
-	t.Run("nil *string returns ErrNilValue", func(t *testing.T) {
-		t.Parallel()
-		opt, err := OfPtr[string, *string](nil)
-		if !errors.Is(err, ErrNilValue) {
-			t.Fatalf("OfPtr[string, *string](nil) error = %v, want ErrNilValue", err)
+		if opt, err := Of[func(int)](nil); !errors.Is(err, ErrNilValue) || opt.IsPresent() {
+			t.Errorf("Of[func(int)](nil) = (%v, %v), want (empty, ErrNilValue)", opt.IsPresent(), err)
 		}
-		if opt.IsPresent() {
-			t.Error("OfPtr[string, *string](nil) is present, want empty")
+		if opt, err := Of[any](nil); !errors.Is(err, ErrNilValue) || opt.IsPresent() {
+			t.Errorf("Of[any](nil) = (%v, %v), want (empty, ErrNilValue)", opt.IsPresent(), err)
 		}
 	})
 }
@@ -131,7 +128,11 @@ func TestEmpty(t *testing.T) {
 func TestIsPresent(t *testing.T) {
 	t.Parallel()
 
-	if !Of("value").IsPresent() {
+	opt, err := Of("value")
+	if err != nil {
+		t.Fatalf("Of(\"value\") error = %v, want nil", err)
+	}
+	if !opt.IsPresent() {
 		t.Error("Of(\"value\").IsPresent() = false, want true")
 	}
 	if Empty[string]().IsPresent() {
@@ -144,14 +145,22 @@ func TestMap(t *testing.T) {
 
 	t.Run("present maps the held value", func(t *testing.T) {
 		t.Parallel()
-		if v, ok := Of(21).Map(func(i int) int { return i * 2 }).Get(); !ok || v != 42 {
+		opt, err := Of(21)
+		if err != nil {
+			t.Fatalf("Of(21) error = %v, want nil", err)
+		}
+		if v, ok := opt.Map(func(i int) int { return i * 2 }).Get(); !ok || v != 42 {
 			t.Errorf("Of(21).Map(*2).Get() = (%d, %v), want (42, true)", v, ok)
 		}
 	})
 
 	t.Run("present maps across types", func(t *testing.T) {
 		t.Parallel()
-		if v, ok := Of("hello").Map(func(s string) int { return len(s) }).Get(); !ok || v != 5 {
+		opt, err := Of("hello")
+		if err != nil {
+			t.Fatalf("Of(\"hello\") error = %v, want nil", err)
+		}
+		if v, ok := opt.Map(func(s string) int { return len(s) }).Get(); !ok || v != 5 {
 			t.Errorf("Of(\"hello\").Map(len).Get() = (%d, %v), want (5, true)", v, ok)
 		}
 	})
@@ -170,6 +179,17 @@ func TestMap(t *testing.T) {
 			t.Error("Map called the function on an empty Option, want not called")
 		}
 	})
+
+	t.Run("mapping to a nil pointer yields an empty option", func(t *testing.T) {
+		t.Parallel()
+		opt, err := Of(42)
+		if err != nil {
+			t.Fatalf("Of(42) error = %v, want nil", err)
+		}
+		if v, ok := opt.Map(func(i int) *int { return nil }).Get(); ok || v != nil {
+			t.Errorf("Map to nil pointer Get() = (%v, %v), want (nil, false)", v, ok)
+		}
+	})
 }
 
 func TestFilter(t *testing.T) {
@@ -177,14 +197,22 @@ func TestFilter(t *testing.T) {
 
 	t.Run("present with a passing predicate stays present", func(t *testing.T) {
 		t.Parallel()
-		if v, ok := Of(42).Filter(func(i int) bool { return i > 0 }).Get(); !ok || v != 42 {
+		opt, err := Of(42)
+		if err != nil {
+			t.Fatalf("Of(42) error = %v, want nil", err)
+		}
+		if v, ok := opt.Filter(func(i int) bool { return i > 0 }).Get(); !ok || v != 42 {
 			t.Errorf("Of(42).Filter(>0).Get() = (%d, %v), want (42, true)", v, ok)
 		}
 	})
 
 	t.Run("present with a failing predicate becomes empty", func(t *testing.T) {
 		t.Parallel()
-		if v, ok := Of(42).Filter(func(i int) bool { return i > 100 }).Get(); ok || v != 0 {
+		opt, err := Of(42)
+		if err != nil {
+			t.Fatalf("Of(42) error = %v, want nil", err)
+		}
+		if v, ok := opt.Filter(func(i int) bool { return i > 100 }).Get(); ok || v != 0 {
 			t.Errorf("Of(42).Filter(>100).Get() = (%d, %v), want (0, false)", v, ok)
 		}
 	})
@@ -210,7 +238,11 @@ func TestOrElse(t *testing.T) {
 
 	t.Run("present yields the held value, not the default", func(t *testing.T) {
 		t.Parallel()
-		if v := Of("set").OrElse("fallback"); v != "set" {
+		opt, err := Of("set")
+		if err != nil {
+			t.Fatalf("Of(\"set\") error = %v, want nil", err)
+		}
+		if v := opt.OrElse("fallback"); v != "set" {
 			t.Errorf("Of(\"set\").OrElse(\"fallback\") = %q, want %q", v, "set")
 		}
 	})
@@ -228,8 +260,12 @@ func TestOrGet(t *testing.T) {
 
 	t.Run("present yields the held value without calling the function", func(t *testing.T) {
 		t.Parallel()
+		opt, err := Of("set")
+		if err != nil {
+			t.Fatalf("Of(\"set\") error = %v, want nil", err)
+		}
 		called := false
-		v := Of("set").OrGet(func() string {
+		v := opt.OrGet(func() string {
 			called = true
 			return "fallback"
 		})
