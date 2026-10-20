@@ -37,17 +37,12 @@ func isNil(v any) bool {
 		return true
 	}
 	rv := reflect.ValueOf(v)
-	switch rv.Kind() {
+	switch rv.Kind() { //nolint:exhaustive // stdlib enum we don't own: a future kind means non-nil, not a lint error
 	case reflect.Pointer, reflect.Map, reflect.Slice, reflect.Chan, reflect.Func, reflect.Interface:
 		return rv.IsNil()
-	case reflect.Invalid, // unreachable: a nil interface is caught above
-		reflect.Bool, reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
-		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr,
-		reflect.Float32, reflect.Float64, reflect.Complex64, reflect.Complex128,
-		reflect.String, reflect.UnsafePointer, reflect.Array, reflect.Struct:
+	default:
 		return false
 	}
-	return false
 }
 
 // Empty returns an absent Option.
