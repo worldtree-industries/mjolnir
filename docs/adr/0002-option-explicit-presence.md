@@ -45,6 +45,9 @@ Java's exception-based strictness:
 
 - Empty access can no longer yield a silent zero value; absence is explicit at every
   call site, and the test suite is rewritten against the new contract.
+- `Map` carries its own type parameter, making it a generic method, which requires
+  the go1.27 language level. The module's `go` directive moves 1.25.0 → 1.27.0 and
+  CI's Go version moves 1.23 → 1.27; consumers must build with Go ≥ 1.27.
 - The API is Java-`Optional`-shaped; Go reviewers may question the functional
   companions on a value type — this ADR is the standing answer.
 - Breaking for any v1.x consumer of `utils/optional`; accepted, since v2.0.0 already
