@@ -31,48 +31,6 @@ func TestGetLoggerNamesTheStream(t *testing.T) {
 	}
 }
 
-// Sensitive keys are masked in both streams; others pass.
-func TestRedactionMasksSensitiveKeys(t *testing.T) {
-	t.Parallel()
-	var buf bytes.Buffer
-	lg := log.GetLoggerTo("RedactionTest", &buf)
-	lg.Info("login",
-		"password", "s3cret",
-		"authorization", "Bearer token123",
-		"email", "user@example.com",
-		"username", "alice",
-	)
-
-	out := buf.String()
-	for _, secret := range []string{"s3cret", "token123", "user@example.com"} {
-		if strings.Contains(out, secret) {
-			t.Errorf("secret leaked: %q in %s", secret, out)
-		}
-	}
-	if !strings.Contains(out, `"password":"***"`) {
-		t.Errorf("password not masked in json: %s", out)
-	}
-	if !strings.Contains(out, `password=***`) {
-		t.Errorf("password not masked in text: %s", out)
-	}
-	if !strings.Contains(out, `"username":"alice"`) {
-		t.Errorf("non-sensitive key was altered: %s", out)
-	}
-}
-
-// Redaction is case-insensitive on the key.
-func TestRedactionIsCaseInsensitive(t *testing.T) {
-	t.Parallel()
-	var buf bytes.Buffer
-	lg := log.GetLoggerTo("RedactionCase", &buf)
-	lg.Info("login", "Password", "hunter2", "EMAIL", "x@y.z")
-
-	out := buf.String()
-	if strings.Contains(out, "hunter2") || strings.Contains(out, "x@y.z") {
-		t.Errorf("case-variant sensitive keys not masked: %s", out)
-	}
-}
-
 // Source attribution points at the caller. The guard is that source.function
 // and source.file identify the calling test: a wrong frame count would land
 // inside log/slog or utils/log. (We assert the function and file rather than

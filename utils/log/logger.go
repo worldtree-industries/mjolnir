@@ -13,8 +13,8 @@
 //
 // Output goes to two streams: a human-readable text stream on stdout and a
 // JSON stream to a file (default logs/mjolnir.jsonl) for Victorialogs and
-// other exporters. Line-of-code attribution is on by default. Sensitive
-// fields (password, authorization, email) are redacted unconditionally.
+// other exporters. Line-of-code attribution is on by default. The package
+// does not redact fields; callers decide what is safe to log.
 //
 // The shared state (the two sink destinations and the per-name level table)
 // lives in a [core]. The package holds one default core; a logger returned by
@@ -29,7 +29,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 )
 
@@ -121,13 +120,12 @@ func (c *core) loggerTo(name string, w io.Writer) *slog.Logger {
 }
 
 // newLogger builds the dual-handler (text + JSON) logger for name, writing to
-// the given destinations with source attribution and redaction enabled. The
-// level is read through lvl for every record.
+// the given destinations with source attribution enabled. The level is read
+// through lvl for every record.
 func newLogger(name string, textDest, jsonDest io.Writer, lvl slog.Leveler) *slog.Logger {
 	opts := &slog.HandlerOptions{
-		AddSource:   true,
-		Level:       lvl,
-		ReplaceAttr: redact,
+		AddSource: true,
+		Level:     lvl,
 	}
 	return slog.New(slog.NewMultiHandler(
 		slog.NewTextHandler(textDest, opts),
@@ -211,15 +209,6 @@ func (n nameLeveler) Level() slog.Level {
 		return l
 	}
 	return n.core.defaultLevel
-}
-
-// redact masks sensitive field values before serialization.
-func redact(_ []string, a slog.Attr) slog.Attr {
-	switch strings.ToLower(a.Key) {
-	case "password", "authorization", "email":
-		a.Value = slog.StringValue("***")
-	}
-	return a
 }
 
 // swappableWriter is an [io.Writer] whose destination can be swapped at any

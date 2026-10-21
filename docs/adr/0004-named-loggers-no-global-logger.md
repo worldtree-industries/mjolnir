@@ -14,7 +14,8 @@ The framework reassigned zerolog's package-global `log.Logger` (in `router.New`)
 
 - **`GetLogger(name string) *slog.Logger`** returns a ready-to-use stdlib logger: no wrapper type, no shared logger instance. Callers hold and emit through it directly.
 - **Per-name level table**: the package owns a `name → slog.Level` map (guarded by an `RWMutex`) plus a default level. Each logger's handlers hold a small `Leveler` view that consults the table **per record** (the name's row if present, else the default); `slog.HandlerOptions.Level` accepts any `Leveler`, and the stdlib handlers call `Level()` for each record. `SetLevel(name, lvl)` and `SetDefaultLevel(lvl)` write the table and take effect on the next emitted record for **every** logger of that name — held or `With()`-derived — because the view re-reads the table each time (verified under `-race`).
-- **Sinks**: `slog.NewMultiHandler` — a human-readable text handler to stdout, a JSON handler to a file (default `logs/mjolnir.jsonl`, append-only; degrade gracefully if it cannot be opened). Line attribution is on by default via `AddSource`; redaction (password, authorization, email) via `ReplaceAttr`.
+- **Sinks**: `slog.NewMultiHandler` — a human-readable text handler to stdout, a JSON handler to a file (default `logs/mjolnir.jsonl`, append-only; degrade gracefully if it cannot be opened). Line attribution is on by default via `AddSource`.
+- **No automatic redaction**: the package does not inspect or mask attributes; callers decide what is safe to log.
 - **No package-level `Fatal`**: slog has none. Call sites that must terminate log at `Error` and call `os.Exit` themselves.
 - **Test seam**: `UseOutputForTests(io.Writer)` redirects both sinks and returns a `restore` function; documented as for tests only.
 

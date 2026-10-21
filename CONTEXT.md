@@ -9,7 +9,7 @@ This project provides a preconfigured logging library (`utils/log`) built around
 - Two output streams: human-readable to stdout, JSON to a file for Victorialogs/Grafana
 - Line-of-code attribution (source file:line) on every log line, on by default
 - Log level is a minimum threshold (e.g. Info emits Info, Warn, Error)
-- Redaction: password, authorization, email — applied unconditionally at the handler
+- No automatic redaction: callers decide what is safe to log
 - Deliberately correlation-agnostic: it is a general-purpose logging foundation and knows nothing about HTTP. Request-id (and any other correlation field) is attached by callers that have it, via the ordinary `*slog.Logger.With`.
 
 ## Key Concepts
@@ -34,7 +34,6 @@ A component that formats and delivers log events to a destination. The framework
 | **Source** | The line of code (file and line) that emitted a log event |
 | **Context** | The Go `context.Context`: a carrier for request-scoped metadata such as the request id |
 | **Request ID** | An identifier for one HTTP request, set by the RequestID middleware on the context and echoed in the `X-Request-ID` header; the HTTP layer attaches it to request log lines |
-| **Redaction** | Unconditional masking of sensitive field values (password, authorization, email) |
 | **JSON Stream** | The machine-readable stream, written to a file for Victorialogs/Grafana |
 | **Text Stream** | The human-readable stream, written to stdout for CLI/kubectl |
 | **Option** | A container for a value that may be absent |
@@ -47,7 +46,7 @@ A component that formats and delivers log events to a destination. The framework
 - **No global logger**: `GetLogger(name)` hands out ready-to-use loggers; the package owns a name→level table and the sink writers, and nothing else — ADR-0004
 - **Per-name levels, on the fly**: `SetLevel(name, lvl)` takes effect on the next emitted event for every logger of that name; level is a minimum threshold, default Info
 - **Output**: text → stdout, JSON → file (default `logs/mjolnir.jsonl`, append-only); attribution on by default via `AddSource`
-- **Redaction**: password, authorization, email — enforced at the handler (ADR-0001's "unconditional" intent)
+- **No automatic redaction**: the package does not inspect or mask fields; callers decide what is safe to log
 - **Correlation is the caller's job**: the logging package is correlation-agnostic; the HTTP layer (`middleware`) owns the request id (context key + `GetRequestID`) and attaches it to request log lines via `*slog.Logger.With`
 - **No package-level Fatal**: callers that must terminate log at Error and exit themselves
 - **Test seam**: `UseOutputForTests` redirects both sinks; documented as for tests only
