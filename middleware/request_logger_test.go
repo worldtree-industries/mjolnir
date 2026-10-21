@@ -2,10 +2,13 @@ package middleware
 
 import (
 	"bytes"
+	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/dfryer1193/mjolnir/utils/log"
@@ -147,6 +150,58 @@ func TestRequestLoggerOmitsAbsentRequestID(t *testing.T) {
 
 	if strings.Contains(buf.String(), "request_id") {
 		t.Errorf("request_id should be absent, not empty:\n%s", buf.String())
+	}
+}
+
+// TestRequestLoggerConcurrentIsolation: the underlying logger is shared across
+// requests, but the request id is per-request. Reassigning the captured logger
+// would race and let one request's id leak into another's line.
+func TestRequestLoggerConcurrentIsolation(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	inner := requestLogger(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}), log.GetLoggerTo("http", &buf))
+	withID := RequestID(inner)
+
+	const requests = 32
+	var wg sync.WaitGroup
+	for i := range requests {
+		wg.Go(func() {
+			id := fmt.Sprintf("id-%d", i)
+
+			req := httptest.NewRequest(http.MethodGet, "/with/"+id, nil)
+			req.Header.Set("X-Request-ID", id)
+			withID.ServeHTTP(httptest.NewRecorder(), req)
+
+			// No RequestID middleware: this line must not inherit an id.
+			plain := httptest.NewRequest(http.MethodGet, "/without/"+id, nil)
+			inner.ServeHTTP(httptest.NewRecorder(), plain)
+		})
+	}
+	wg.Wait()
+
+	for line := range strings.SplitSeq(buf.String(), "\n") {
+		if !strings.HasPrefix(line, "{") {
+			continue // text-stream line
+		}
+		var entry struct {
+			Path      string `json:"path"`
+			RequestID string `json:"request_id"`
+		}
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			t.Fatalf("json parse: %v\n%s", err, line)
+		}
+		switch {
+		case strings.HasPrefix(entry.Path, "/with/"):
+			if want := strings.TrimPrefix(entry.Path, "/with/"); entry.RequestID != want {
+				t.Errorf("path %s: got request_id %q, want %q", entry.Path, entry.RequestID, want)
+			}
+		case strings.HasPrefix(entry.Path, "/without/"):
+			if entry.RequestID != "" {
+				t.Errorf("path %s inherited request_id %q", entry.Path, entry.RequestID)
+			}
+		}
 	}
 }
 

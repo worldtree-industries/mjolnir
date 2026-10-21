@@ -27,13 +27,16 @@ func requestLogger(next http.Handler, lg *slog.Logger) http.Handler {
 		next.ServeHTTP(ww, r)
 
 		// Attach the request id (set by the RequestID middleware) so the
-		// request can be correlated. It is omitted when absent.
+		// request can be correlated. It is omitted when absent. The id is
+		// attached to a per-request local: reassigning the captured lg would
+		// share state across concurrent requests.
+		reqLog := lg
 		if id := GetRequestID(r.Context()); id != "" {
-			lg = lg.With(slog.String("request_id", id))
+			reqLog = reqLog.With(slog.String("request_id", id))
 		}
 
 		// Log the request details
-		lg.InfoContext(r.Context(), "request completed",
+		reqLog.InfoContext(r.Context(), "request completed",
 			slog.String("method", r.Method),
 			slog.String("path", r.URL.Path),
 			slog.String("remote_addr", r.RemoteAddr),

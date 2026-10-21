@@ -116,7 +116,7 @@ func GetLoggerTo(name string, w io.Writer) *slog.Logger {
 // loggerTo is GetLoggerTo bound to this core, so it honours this core's level
 // table rather than the default one.
 func (c *core) loggerTo(name string, w io.Writer) *slog.Logger {
-	sw := &lockedWriter{w: w}
+	sw := &swappableWriter{w: w}
 	return newLogger(name, sw, sw, nameLeveler{core: c, name: name})
 }
 
@@ -124,17 +124,15 @@ func (c *core) loggerTo(name string, w io.Writer) *slog.Logger {
 // the given destinations with source attribution and redaction enabled. The
 // level is read through lvl for every record.
 func newLogger(name string, textDest, jsonDest io.Writer, lvl slog.Leveler) *slog.Logger {
-	text := slog.NewTextHandler(textDest, &slog.HandlerOptions{
+	opts := &slog.HandlerOptions{
 		AddSource:   true,
 		Level:       lvl,
 		ReplaceAttr: redact,
-	})
-	json := slog.NewJSONHandler(jsonDest, &slog.HandlerOptions{
-		AddSource:   true,
-		Level:       lvl,
-		ReplaceAttr: redact,
-	})
-	return slog.New(slog.NewMultiHandler(text, json)).With("logger", name)
+	}
+	return slog.New(slog.NewMultiHandler(
+		slog.NewTextHandler(textDest, opts),
+		slog.NewJSONHandler(jsonDest, opts),
+	)).With("logger", name)
 }
 
 // SetLevel sets the minimum level for name. The change takes effect on the
@@ -171,16 +169,11 @@ func SetJSONFile(path string) error {
 }
 
 func (c *core) setJSONFile(path string) error {
-	if dir := filepath.Dir(path); dir != "." {
-		if err := os.MkdirAll(dir, 0o750); err != nil {
-			return err
-		}
-	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	f, err := openLogFile(path)
 	if err != nil {
 		return err
 	}
-	c.json.set(f)
+	closeWriter(c.json.swap(f))
 	return nil
 }
 
@@ -195,7 +188,7 @@ func UseOutputForTests(w io.Writer) func() {
 }
 
 func (c *core) useOutputForTests(w io.Writer) func() {
-	sw := &lockedWriter{w: w}
+	sw := &swappableWriter{w: w}
 	prevText := c.text.swap(sw)
 	prevJSON := c.json.swap(sw)
 	return func() {
@@ -211,13 +204,13 @@ type nameLeveler struct {
 	name string
 }
 
-func (v nameLeveler) Level() slog.Level {
-	v.core.mu.RLock()
-	defer v.core.mu.RUnlock()
-	if l, ok := v.core.nameLevels[v.name]; ok {
+func (n nameLeveler) Level() slog.Level {
+	n.core.mu.RLock()
+	defer n.core.mu.RUnlock()
+	if l, ok := n.core.nameLevels[n.name]; ok {
 		return l
 	}
-	return v.core.defaultLevel
+	return n.core.defaultLevel
 }
 
 // redact masks sensitive field values before serialization.
@@ -278,20 +271,56 @@ func (f *lazyFile) Write(p []byte) (int, error) {
 		return len(p), nil
 	}
 	if f.file == nil {
-		if err := os.MkdirAll(filepath.Dir(f.path), 0o750); err != nil {
-			f.missing = true
-			warnOncef("cannot create log directory %q: %v; JSON stream disabled", f.path, err)
-			return len(p), nil
-		}
-		file, err := os.OpenFile(f.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+		file, err := openLogFile(f.path)
 		if err != nil {
 			f.missing = true
-			warnOncef("cannot open log file %q: %v; JSON stream disabled", f.path, err)
+			warnOncef("cannot open %q: %v; JSON stream disabled", f.path, err)
 			return len(p), nil
 		}
 		f.file = file
 	}
 	return f.file.Write(p)
+}
+
+// Close closes the underlying file, if it was opened. A later Write reopens it.
+func (f *lazyFile) Close() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.file == nil {
+		return nil
+	}
+	err := f.file.Close()
+	f.file = nil
+	return err
+}
+
+// openLogFile creates path's directory if needed and opens the file for
+// append-only writes.
+func openLogFile(path string) (*os.File, error) {
+	if dir := filepath.Dir(path); dir != "." {
+		if err := os.MkdirAll(dir, 0o750); err != nil {
+			return nil, fmt.Errorf("create log directory: %w", err)
+		}
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("open log file: %w", err)
+	}
+	return f, nil
+}
+
+// closeWriter releases the resource held by w, if it owns one. Buffers and
+// [io.Discard] are left alone, and the standard streams are never closed.
+func closeWriter(w io.Writer) {
+	if f, ok := w.(*os.File); ok {
+		if f != os.Stdout && f != os.Stderr {
+			_ = f.Close()
+		}
+		return
+	}
+	if c, ok := w.(io.Closer); ok {
+		_ = c.Close()
+	}
 }
 
 // warnOncef writes a one-time warning to stderr. It writes directly (rather
@@ -301,16 +330,4 @@ func warnOncef(format string, args ...any) {
 	warnOnceMu.Do(func() {
 		fmt.Fprintf(os.Stderr, "mjolnir/log: "+format+"\n", args...)
 	})
-}
-
-// lockedWriter serializes concurrent writes to w.
-type lockedWriter struct {
-	mu sync.Mutex
-	w  io.Writer
-}
-
-func (l *lockedWriter) Write(p []byte) (int, error) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.w.Write(p)
 }
