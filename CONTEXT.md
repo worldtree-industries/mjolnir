@@ -2,60 +2,53 @@
 
 ## Overview
 
-This project is a preconfigured logging library (`utils/log`) built around `github.com/rs/zerolog` (not `log/slog`). It provides a standard, opinionated configuration that applications importing this framework should use uniformly. The library exposes the configured `zerolog.Logger` directly, plus helpers for structured logging, correlation, and observability. Correlation fields are extracted from `context.Context`; middleware integration is pluggable.
+This project provides a preconfigured logging library (`utils/log`) built around the standard library's `log/slog`. It gives applications importing this framework one way to get a logger: ask for it by component name. There is no global logger — no package- or process-wide shared instance to configure or reassign. Each logger is bound to a per-name level that can be changed on the fly, and every log line carries line-of-code attribution.
 
-- Emits structured JSON logs (Victorialogs/Grafana) + human-readable (CLI/kubectl)
-- Two output streams with RFC3339 timestamps
-- Configurable log levels (DEBUG, INFO, WARN, ERROR)
-- Correlation fields extracted from context.Context (request_id, trace_id, user_id)
-- Redaction rules: password, auth headers, emails
-- Pluggable middleware support
-- Factory creates named loggers: New(name string)
+- Foundation: `log/slog` (standard library), per ADR-0003 (supersedes ADR-0001)
+- Named loggers via `GetLogger(name)`; per-name levels changeable on the fly (ADR-0004)
+- Two output streams: human-readable to stdout, JSON to a file for Victorialogs/Grafana
+- Line-of-code attribution (source file:line) on every log line, on by default
+- Log level is a minimum threshold (e.g. Info emits Info, Warn, Error)
+- Redaction: password, authorization, email — applied unconditionally at the handler
+- Deliberately correlation-agnostic: it is a general-purpose logging foundation and knows nothing about HTTP. Request-id (and any other correlation field) is attached by callers that have it, via the ordinary `*slog.Logger.With`.
 
 ## Key Concepts
 
 ### Log Event
 
-A log event represents a single unit of information emitted by the application. It contains:
-- **Level** – severity of the event (DEBUG, INFO, WARN, ERROR)
-- **Message** – human-readable description of the event
-- **Fields** – structured key-value pairs for machine parsing
-- **Metadata** – optional context such as trace ID, span ID, user ID, request ID
+A single unit of information emitted by the application. It contains a **Level** (severity), a **Message**, structured **Fields** (key-value pairs), and carries **Source** (the line of code that emitted it) plus the **logger** field (which component emitted it). Callers may attach further fields — for example the HTTP layer attaches the request id.
 
 ### Log Handler
 
-A handler is responsible for formatting and delivering log events. Handlers can:
-- Serialize events to JSON (or other formats)
-- Route events to different destinations (file, stdout, external aggregator)
-- Add correlation metadata (trace ID, span ID)
-- Perform redaction of sensitive fields (PII, passwords)
-
-### Context
-
-Context is the set of data that travels with a log event to enable correlation across services. Correlation fields (request_id, trace_id, user_id) are extracted from `context.Context` via middleware.
+A component that formats and delivers log events to a destination. The framework composes two handlers — a human-readable one to stdout and a JSON one to a file — so every event reaches both.
 
 ## Glossary
 
 | Term | Definition |
 |------|------------|
 | **Log Event** | A single structured log entry emitted by the application |
-| **Handler** | A component that formats and delivers log events |
-| **Context** | Metadata attached to a log event for correlation |
-| **Trace ID** | Identifier for a distributed transaction across services |
-| **Span ID** | Identifier for a specific operation within a trace |
-| **Redaction** | Automatic masking of sensitive data in log messages |
+| **Handler** | A component that formats and delivers log events to a destination |
+| **Named Logger** | A logger obtained by component name via `GetLogger(name)`; the name is the logger's identity and the key for its level |
+| **Level** | The minimum threshold for a name: an event is emitted only at or above it |
+| **Default Level** | The level used by a name that has none of its own; `SetDefaultLevel` changes it for all such names |
+| **Source** | The line of code (file and line) that emitted a log event |
+| **Context** | The Go `context.Context`: a carrier for request-scoped metadata such as the request id |
+| **Request ID** | An identifier for one HTTP request, set by the RequestID middleware on the context and echoed in the `X-Request-ID` header; the HTTP layer attaches it to request log lines |
+| **Redaction** | Unconditional masking of sensitive field values (password, authorization, email) |
+| **JSON Stream** | The machine-readable stream, written to a file for Victorialogs/Grafana |
+| **Text Stream** | The human-readable stream, written to stdout for CLI/kubectl |
 | **Option** | A container for a value that may be absent |
 | **Present** | An Option holding a non-nil value |
 | **Empty** | An Option holding no value |
 
 ## Design Decisions
 
-- **Two output streams**: JSON stream for Victorialogs/Grafana observability; human-readable stream for CLI/kubectl. Every log call writes to both handlers (double I/O) — benchmark at high throughput.
-- **Timestamp format**: RFC3339
-- **Redaction rules**: password, auth headers, emails (email is ok but not ideal)
-- **Correlation fields**: request_id, trace_id, user_id — extracted from context.Context
-- **Middleware**: pluggable (works with any HTTP framework, not just chi)
-- **API**: factory creates named loggers: New(name string)
-- **Human-readable stream**: all levels (not just WARN+)
-- **ADR-0001**: decision to use zerolog (not slog), hard-to-reverse
+- **Foundation**: `log/slog`, stdlib — ADR-0003 (supersedes ADR-0001)
+- **No global logger**: `GetLogger(name)` hands out ready-to-use loggers; the package owns a name→level table and the sink writers, and nothing else — ADR-0004
+- **Per-name levels, on the fly**: `SetLevel(name, lvl)` takes effect on the next emitted event for every logger of that name; level is a minimum threshold, default Info
+- **Output**: text → stdout, JSON → file (default `logs/mjolnir.jsonl`, append-only); attribution on by default via `AddSource`
+- **Redaction**: password, authorization, email — enforced at the handler (ADR-0001's "unconditional" intent)
+- **Correlation is the caller's job**: the logging package is correlation-agnostic; the HTTP layer (`middleware`) owns the request id (context key + `GetRequestID`) and attaches it to request log lines via `*slog.Logger.With`
+- **No package-level Fatal**: callers that must terminate log at Error and exit themselves
+- **Test seam**: `UseOutputForTests` redirects both sinks; documented as for tests only
 - **ADR-0002**: Option[T] redesigned around explicit presence (comma-ok `Get()`), module floor go1.27

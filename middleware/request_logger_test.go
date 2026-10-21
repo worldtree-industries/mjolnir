@@ -2,17 +2,16 @@ package middleware
 
 import (
 	"bytes"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
-	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
+	"github.com/dfryer1193/mjolnir/utils/log"
 )
 
 func TestRequestLogger(t *testing.T) {
-	t.Parallel()
 	tests := []struct {
 		name         string
 		method       string
@@ -68,12 +67,12 @@ func TestRequestLogger(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Capture logs
-			var buf bytes.Buffer
-			log.Logger = zerolog.New(&buf)
+			t.Parallel()
 
-			// Create test handler
-			handler := RequestLogger(http.HandlerFunc(tt.handlerFunc))
+			// Capture this subtest's output; the injected logger is isolated
+			// from the process-wide sinks, so subtests can run concurrently.
+			var buf bytes.Buffer
+			handler := requestLogger(http.HandlerFunc(tt.handlerFunc), log.GetLoggerTo("http", &buf))
 
 			// Create test request
 			req := httptest.NewRequest(tt.method, tt.path, nil)
@@ -85,7 +84,7 @@ func TestRequestLogger(t *testing.T) {
 			// Check status code
 			if rr.Code != tt.expectedCode {
 				t.Errorf("handler returned wrong status code: got %v want %v",
-					rr.Code, tt.expectedCode)
+					tt.expectedCode, rr.Code)
 			}
 
 			// Check logs
@@ -97,15 +96,57 @@ func TestRequestLogger(t *testing.T) {
 			}
 
 			// Verify log contains latency
-			if !strings.Contains(logStr, `"latency"`) {
+			if !strings.Contains(logStr, "latency") {
 				t.Error("log doesn't contain latency information")
 			}
 
 			// Verify log contains remote_addr
-			if !strings.Contains(logStr, `"remote_addr"`) {
+			if !strings.Contains(logStr, "remote_addr") {
 				t.Error("log doesn't contain remote_addr information")
 			}
 		})
+	}
+}
+
+// TestRequestLoggerCorrelatesRequestID proves the id stamped by the RequestID
+// middleware reaches the request log line.
+func TestRequestLoggerCorrelatesRequestID(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+
+	handler := requestLogger(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}), log.GetLoggerTo("http", &buf))
+	// RequestID wraps RequestLogger so the id is on the context when the
+	// request is logged, as it is on the real router.
+	handler = RequestID(handler)
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("X-Request-ID", "req-abc-123")
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	logStr := buf.String()
+	if !strings.Contains(logStr, `"request_id":"req-abc-123"`) {
+		t.Errorf("request log line missing correlated request_id:\n%s", logStr)
+	}
+}
+
+// TestRequestLoggerOmitsAbsentRequestID: without the RequestID middleware the
+// field is simply absent, not empty.
+func TestRequestLoggerOmitsAbsentRequestID(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+
+	handler := requestLogger(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}), log.GetLoggerTo("http", &buf))
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if strings.Contains(buf.String(), "request_id") {
+		t.Errorf("request_id should be absent, not empty:\n%s", buf.String())
 	}
 }
 
@@ -153,7 +194,8 @@ func TestResponseWriter(t *testing.T) {
 				rw.WriteHeader(http.StatusOK) // Should be ignored
 
 				if rw.status != statusCode {
-					t.Errorf("expected status %d, got %d", statusCode, rw.status)
+					t.Errorf("expected status %d, got %d",
+						statusCode, rw.status)
 				}
 			}
 
@@ -162,31 +204,32 @@ func TestResponseWriter(t *testing.T) {
 				if err != nil {
 					t.Fatalf("unexpected error: %v", err)
 				}
-				if n != 4 {
-					t.Errorf("expected to write 4 bytes, wrote %d", n)
+				if n != len("test") {
+					t.Errorf("expected %d bytes, wrote %d bytes",
+						len("test"), n)
 				}
 			}
 
 			if rw.status != tt.expectedCode {
-				t.Errorf("expected status %d, got %d", tt.expectedCode, rw.status)
+				t.Errorf("expected status %d, got %d",
+					tt.expectedCode, rw.status)
 			}
 
-			// Test Header() method
-			rw.Header().Set("X-Test", "test")
-			if base.Header().Get("X-Test") != "test" {
-				t.Error("Header() method not working correctly")
+			if tt.writeHeader {
+				// Test Header()
+				rw.Header().Set("X-Test", "test")
+				if base.Header().Get("X-Test") != "test" {
+					t.Error("Header() method not working correctly")
+				}
 			}
 		})
 	}
 }
 
 func BenchmarkRequestLogger(b *testing.B) {
-	// Disable logging for benchmark
-	log.Logger = zerolog.New(nil)
-
-	handler := RequestLogger(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := requestLogger(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
-	}))
+	}), log.GetLoggerTo("http", io.Discard))
 
 	req := httptest.NewRequest(http.MethodGet, "/benchmark", nil)
 	rr := httptest.NewRecorder()

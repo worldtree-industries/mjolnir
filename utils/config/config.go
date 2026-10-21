@@ -5,13 +5,45 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/rs/zerolog/log"
+	"github.com/dfryer1193/mjolnir/utils/log"
 )
+
+// defaultLoader is the process-wide configuration singleton. Keeping the
+// loaded state (and its logger) in a value lets tests build isolated loaders
+// and run in parallel.
+//
+//nolint:gochecknoglobals // singleton pattern for loaded config
+var defaultLoader = newLoader(log.GetLogger("config"))
+
+// loader holds one loaded configuration. The package keeps a single default
+// loader; tests construct their own.
+type loader struct {
+	mu       sync.Mutex
+	instance Config
+	loaded   bool
+	logger   *slog.Logger
+}
+
+func newLoader(lg *slog.Logger) *loader {
+	return &loader{logger: lg}
+}
+
+// fatal logs at Error and exits. The logging package is deliberately without
+// a Fatal; a call site that must terminate logs and exits itself.
+func (l *loader) fatal(msg string, err error) {
+	if err != nil {
+		l.logger.Error(msg, slog.Any("error", err))
+	} else {
+		l.logger.Error(msg)
+	}
+	os.Exit(1)
+}
 
 // Config is a map-based configuration structure.
 // It uses map[string]any for maximum flexibility and JSON compatibility.
@@ -51,59 +83,67 @@ var defaults = map[string]any{
 	},
 }
 
-//nolint:gochecknoglobals // singleton pattern for loaded config
-var (
-	configInstance Config
-	configLoadOnce sync.Once
-	configLoaded   bool
-)
-
 // Load loads configuration from ./config.json, applies defaults,
 // and returns the configuration singleton.
 func Load() (Config, error) {
-	configLoadOnce.Do(func() {
-		configInstance = make(Config)
-		configLoaded = true
+	return defaultLoader.load()
+}
 
-		_, statErr := os.Stat("./config.json")
-		switch {
-		case statErr == nil:
-			file, openErr := os.Open("./config.json")
-			if openErr != nil {
-				log.Fatal().Err(openErr).Msg("failed to open config.json")
-			}
-			defer file.Close()
+// load reads ./config.json into l exactly once, then returns the result.
+func (l *loader) load() (Config, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.loaded {
+		return l.instance, nil
+	}
 
-			bytes, readErr := io.ReadAll(file)
-			if readErr != nil {
-				log.Fatal().Err(readErr).Msg("failed to read config.json")
-			}
+	l.instance = make(Config)
+	l.loaded = true
 
-			if unmarshalErr := json.Unmarshal(bytes, &configInstance); unmarshalErr != nil {
-				log.Fatal().Err(unmarshalErr).Msg("failed to parse config.json")
-			}
-		case errors.Is(statErr, os.ErrNotExist):
-			log.Warn().Msg("config.json not found, using defaults")
-		default:
-			log.Fatal().Err(statErr).Msg("failed to stat config.json")
+	_, statErr := os.Stat("./config.json")
+	switch {
+	case statErr == nil:
+		file, openErr := os.Open("./config.json")
+		if openErr != nil {
+			l.fatal("failed to open config.json", openErr)
+		}
+		defer file.Close()
+
+		bytes, readErr := io.ReadAll(file)
+		if readErr != nil {
+			l.fatal("failed to read config.json", readErr)
 		}
 
-		applyDefaults(configInstance, defaults)
-
-		if validateErr := validateRequired(configInstance); validateErr != nil {
-			log.Error().Err(validateErr).Msg("config validation failed")
+		if unmarshalErr := json.Unmarshal(bytes, &l.instance); unmarshalErr != nil {
+			l.fatal("failed to parse config.json", unmarshalErr)
 		}
-	})
+	case errors.Is(statErr, os.ErrNotExist):
+		l.logger.Warn("config.json not found, using defaults")
+	default:
+		l.fatal("failed to stat config.json", statErr)
+	}
 
-	return configInstance, nil
+	applyDefaults(l.instance, defaults)
+
+	if validateErr := validateRequired(l.instance); validateErr != nil {
+		l.logger.Error("config validation failed", slog.Any("error", validateErr))
+	}
+
+	return l.instance, nil
 }
 
 // Get returns the singleton configuration instance.
 func Get() Config {
-	if !configLoaded {
-		log.Fatal().Msg("config has not been loaded yet")
+	return defaultLoader.get()
+}
+
+func (l *loader) get() Config {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if !l.loaded {
+		l.fatal("config has not been loaded yet", nil)
 	}
-	return configInstance
+	return l.instance
 }
 
 // applyDefaults merges defaults into config recursively.
@@ -146,6 +186,6 @@ func (c Config) String() string {
 // SetDirectory sets the config directory (for testing).
 func SetDirectory(dir string) {
 	if dir != "./config.json" {
-		log.Warn().Str("directory", dir).Msg("config directory override for testing")
+		defaultLoader.logger.Warn("config directory override for testing", slog.String("directory", dir))
 	}
 }

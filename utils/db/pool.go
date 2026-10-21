@@ -3,10 +3,12 @@ package db
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/rs/zerolog/log"
+
+	"github.com/dfryer1193/mjolnir/utils/log"
 )
 
 // Config holds pool sizing and timeouts.
@@ -52,11 +54,11 @@ func Connect(ctx context.Context, dsn string, cfg Config) (*Pool, error) {
 		return nil, fmt.Errorf("failed to ping database: %w", pingErr)
 	}
 
-	log.Info().
-		Int("min_conns", cfg.MinConns).
-		Int("max_conns", cfg.MaxConns).
-		Str("dsn", maskDSN(dsn)).
-		Msg("database pool connected")
+	log.GetLogger("db").InfoContext(ctx, "database pool connected",
+		slog.Int("min_conns", cfg.MinConns),
+		slog.Int("max_conns", cfg.MaxConns),
+		slog.String("dsn", maskDSN(dsn)),
+	)
 
 	return &Pool{pool: pool, cfg: cfg}, nil
 }

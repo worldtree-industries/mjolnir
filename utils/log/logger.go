@@ -1,160 +1,316 @@
+// Package log is the framework's preconfigured logging, built on the
+// standard library's [log/slog].
+//
+// There is no global logger. Callers obtain a ready-to-use [*slog.Logger] for
+// their component by name via GetLogger; the name is the logger's identity
+// and becomes the "logger" field on every line. SetLevel and SetDefaultLevel
+// change levels on the fly — the effective level is re-checked for every
+// record, so no logger needs to be re-fetched.
+//
+// This package is a general-purpose logging foundation: it knows nothing
+// about HTTP or request correlation. Correlation fields (request id, etc.)
+// are attached by callers that have them, using the usual [*slog.Logger].With.
+//
+// Output goes to two streams: a human-readable text stream on stdout and a
+// JSON stream to a file (default logs/mjolnir.jsonl) for Victorialogs and
+// other exporters. Line-of-code attribution is on by default. Sensitive
+// fields (password, authorization, email) are redacted unconditionally.
+//
+// The shared state (the two sink destinations and the per-name level table)
+// lives in a [core]. The package holds one default core; a logger returned by
+// GetLogger is a cheap value handle onto it, so callers obtain one per
+// function rather than caching it at package scope. Tests build isolated
+// cores, which is what lets them exercise the machinery in parallel.
 package log
 
 import (
-	"context"
+	"fmt"
 	"io"
-	"net/http"
+	"log/slog"
 	"os"
-	"slices"
+	"path/filepath"
 	"strings"
-
-	"github.com/rs/zerolog"
+	"sync"
 )
-
-// Context keys for correlation fields.
-type ctxKey int
 
 const (
-	requestIDKey ctxKey = iota
-	traceIDKey
-	userIDKey
+	// DefaultJSONPath is where the JSON stream is written unless
+	// SetJSONFile changes it.
+	DefaultJSONPath = "logs/mjolnir.jsonl"
+
+	// DefaultLevel is the minimum level for names that have no level of
+	// their own.
+	DefaultLevel = slog.LevelInfo
 )
 
-// redactKeys are the field keys that should be masked in logs.
-const (
-	redactPassword      = "password"
-	redactAuthorization = "authorization"
-	redactEmail         = "email"
-)
+// defaultCore is the process-wide state every GetLogger handle points at: the
+// two sink destinations and the per-name level table. It must be process-wide,
+// hence package-level.
+//
+//nolint:gochecknoglobals // the shared logging state; the only global this package holds, and it is synchronized
+var defaultCore = newCore(os.Stdout, newLazyFile(DefaultJSONPath))
 
-// Logger wraps zerolog.Logger.
-type Logger struct {
-	zerolog.Logger
+// warnOnceMu guards the one-time warning emitted when the JSON file cannot be
+// opened.
+//
+//nolint:gochecknoglobals // one-time warning guard
+var warnOnceMu sync.Once
+
+// core holds the two sink destinations and the per-name level table. The
+// package keeps one default core; tests construct isolated ones, so the
+// stateful machinery can be exercised in parallel without touching
+// process-wide state.
+type core struct {
+	text *swappableWriter
+	json *swappableWriter
+
+	mu           sync.RWMutex
+	nameLevels   map[string]slog.Level
+	defaultLevel slog.Level
 }
 
-// New creates a named Logger with dual output streams:
-// - JSON stream to stdout (Victorialogs/Grafana observability)
-// - Human-readable console stream to stderr (CLI/kubectl debugging)
-// Both streams receive all log levels (DEBUG, INFO, WARN, ERROR).
-func New(name string) *Logger {
-	_ = zerolog.New(os.Stdout)
-
-	multi := zerolog.New(io.MultiWriter(os.Stdout, os.Stderr)).
-		With().
-		Str("logger", name).
-		Timestamp().
-		Logger()
-
-	return &Logger{Logger: multi}
-}
-
-// With adds optional fields to the log line, redacting sensitive values.
-func (l *Logger) With(key string, value any) *Logger {
-	redacted := value
-	if isSensitive(key) {
-		redacted = "***"
-	}
-	return &Logger{
-		Logger: l.Logger.With().Interface(key, redacted).Logger(),
+// newCore returns a core writing text and JSON to the given destinations, with
+// an empty level table at DefaultLevel.
+func newCore(text, json io.Writer) *core {
+	return &core{
+		text:         &swappableWriter{w: text},
+		json:         &swappableWriter{w: json},
+		nameLevels:   make(map[string]slog.Level),
+		defaultLevel: DefaultLevel,
 	}
 }
 
-// Zero returns a fresh Logger with no correlation fields.
-func (l *Logger) Zero() *Logger {
-	return &Logger{Logger: zerolog.New(io.Discard)}
+// GetLogger returns a ready-to-use [*slog.Logger] for the named component.
+// Every line it emits carries the "logger" field set to name and the source
+// file:line of the call. The level in effect for name is checked for every
+// record, so SetLevel and SetDefaultLevel take effect on the next emitted
+// line without re-fetching the logger — including for With()-derived
+// loggers.
+//
+// The logger writes to the process-wide sinks (text on stdout, JSON to the
+// configured file), so it is affected by SetJSONFile and UseOutputForTests.
+// It is cheap to construct, so obtain it per function rather than caching it
+// at package scope.
+func GetLogger(name string) *slog.Logger {
+	return defaultCore.logger(name)
 }
 
-// WithRequestID returns a logger with the given request_id.
-func (l *Logger) WithRequestID(id string) *Logger {
-	return &Logger{Logger: l.Logger.With().Str("request_id", id).Logger()}
+// logger builds the dual-handler logger for name bound to this core.
+func (c *core) logger(name string) *slog.Logger {
+	return newLogger(name, c.text, c.json, nameLeveler{core: c, name: name})
 }
 
-// WithTraceID returns a logger with the given trace_id.
-func (l *Logger) WithTraceID(id string) *Logger {
-	return &Logger{Logger: l.Logger.With().Str("trace_id", id).Logger()}
+// GetLoggerTo returns a [*slog.Logger] for the named component that writes
+// both streams to w. Unlike GetLogger it is isolated from the process-wide
+// sinks: it does not read from, write to, or interfere with the default
+// destinations, SetJSONFile, or UseOutputForTests. That makes it safe to use
+// from many goroutines at once — it is the seam tests should prefer for
+// capture — and it is suitable for embedding a logger into a specific
+// destination.
+//
+// The logger still honours the level currently in effect for name.
+func GetLoggerTo(name string, w io.Writer) *slog.Logger {
+	return defaultCore.loggerTo(name, w)
 }
 
-// WithUserID returns a logger with the given user_id.
-func (l *Logger) WithUserID(id string) *Logger {
-	return &Logger{Logger: l.Logger.With().Str("user_id", id).Logger()}
+// loggerTo is GetLoggerTo bound to this core, so it honours this core's level
+// table rather than the default one.
+func (c *core) loggerTo(name string, w io.Writer) *slog.Logger {
+	sw := &lockedWriter{w: w}
+	return newLogger(name, sw, sw, nameLeveler{core: c, name: name})
 }
 
-// WithContext returns a logger bound to context, extracting correlation fields.
-func (l *Logger) WithContext(ctx context.Context) *Logger {
-	zl := l.Logger.With()
-	if v := ctx.Value(requestIDKey); v != nil {
-		zl = zl.Str("request_id", toString(v))
+// newLogger builds the dual-handler (text + JSON) logger for name, writing to
+// the given destinations with source attribution and redaction enabled. The
+// level is read through lvl for every record.
+func newLogger(name string, textDest, jsonDest io.Writer, lvl slog.Leveler) *slog.Logger {
+	text := slog.NewTextHandler(textDest, &slog.HandlerOptions{
+		AddSource:   true,
+		Level:       lvl,
+		ReplaceAttr: redact,
+	})
+	json := slog.NewJSONHandler(jsonDest, &slog.HandlerOptions{
+		AddSource:   true,
+		Level:       lvl,
+		ReplaceAttr: redact,
+	})
+	return slog.New(slog.NewMultiHandler(text, json)).With("logger", name)
+}
+
+// SetLevel sets the minimum level for name. The change takes effect on the
+// next record emitted by any logger of name. Setting a level for a name that
+// no GetLogger call has made yet records it; loggers later obtained for that
+// name emit at that level.
+func SetLevel(name string, lvl slog.Level) {
+	defaultCore.setLevel(name, lvl)
+}
+
+func (c *core) setLevel(name string, lvl slog.Level) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.nameLevels[name] = lvl
+}
+
+// SetDefaultLevel sets the minimum level used by names that have no level of
+// their own. It takes effect on the next record for every such name.
+func SetDefaultLevel(lvl slog.Level) {
+	defaultCore.setDefaultLevel(lvl)
+}
+
+func (c *core) setDefaultLevel(lvl slog.Level) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.defaultLevel = lvl
+}
+
+// SetJSONFile changes the destination of the JSON stream to the given path
+// (created, and appended to, if needed). It returns an error, leaving the
+// previous destination unchanged, if the file cannot be opened.
+func SetJSONFile(path string) error {
+	return defaultCore.setJSONFile(path)
+}
+
+func (c *core) setJSONFile(path string) error {
+	if dir := filepath.Dir(path); dir != "." {
+		if err := os.MkdirAll(dir, 0o750); err != nil {
+			return err
+		}
 	}
-	if v := ctx.Value(traceIDKey); v != nil {
-		zl = zl.Str("trace_id", toString(v))
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return err
 	}
-	if v := ctx.Value(userIDKey); v != nil {
-		zl = zl.Str("user_id", toString(v))
-	}
-	return &Logger{Logger: zl.Logger()}
+	c.json.set(f)
+	return nil
 }
 
-// toString safely converts a value to string.
-func toString(v any) string {
-	if s, ok := v.(string); ok {
-		return s
-	}
-	return ""
+// UseOutputForTests redirects both streams to w and returns a func that
+// restores the previous destinations. It is for tests only.
+//
+// One locked wrapper is installed as the destination of both streams, so
+// writes from the two handlers are serialized by a single mutex even though
+// they go through two separate stream holders.
+func UseOutputForTests(w io.Writer) func() {
+	return defaultCore.useOutputForTests(w)
 }
 
-// isSensitive checks if a key should be redacted.
-func isSensitive(key string) bool {
-	lower := strings.ToLower(key)
-	return slices.Contains([]string{redactPassword, redactAuthorization, redactEmail}, lower)
-}
-
-// MiddlewareAdapter returns a chi-style middleware that injects correlation IDs into context.
-func MiddlewareAdapter() func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			ctx := r.Context()
-			next.ServeHTTP(w, r.WithContext(ctx))
-		})
+func (c *core) useOutputForTests(w io.Writer) func() {
+	sw := &lockedWriter{w: w}
+	prevText := c.text.swap(sw)
+	prevJSON := c.json.swap(sw)
+	return func() {
+		c.text.set(prevText)
+		c.json.set(prevJSON)
 	}
 }
 
-// Context key accessors for middleware integration
-
-// WithRequestIDContext returns a new context with the request_id set.
-func WithRequestIDContext(ctx context.Context, id string) context.Context {
-	return context.WithValue(ctx, requestIDKey, id)
+// nameLeveler is the per-name Leveler: the name's own level, or the core's
+// default level when none has been set. It is consulted for every record.
+type nameLeveler struct {
+	core *core
+	name string
 }
 
-// WithTraceIDContext returns a new context with the trace_id set.
-func WithTraceIDContext(ctx context.Context, id string) context.Context {
-	return context.WithValue(ctx, traceIDKey, id)
-}
-
-// WithUserIDContext returns a new context with the user_id set.
-func WithUserIDContext(ctx context.Context, id string) context.Context {
-	return context.WithValue(ctx, userIDKey, id)
-}
-
-// RequestIDFromContext extracts the request_id from context.
-func RequestIDFromContext(ctx context.Context) string {
-	if v := ctx.Value(requestIDKey); v != nil {
-		return toString(v)
+func (v nameLeveler) Level() slog.Level {
+	v.core.mu.RLock()
+	defer v.core.mu.RUnlock()
+	if l, ok := v.core.nameLevels[v.name]; ok {
+		return l
 	}
-	return ""
+	return v.core.defaultLevel
 }
 
-// TraceIDFromContext extracts the trace_id from context.
-func TraceIDFromContext(ctx context.Context) string {
-	if v := ctx.Value(traceIDKey); v != nil {
-		return toString(v)
+// redact masks sensitive field values before serialization.
+func redact(_ []string, a slog.Attr) slog.Attr {
+	switch strings.ToLower(a.Key) {
+	case "password", "authorization", "email":
+		a.Value = slog.StringValue("***")
 	}
-	return ""
+	return a
 }
 
-// UserIDFromContext extracts the user_id from context.
-func UserIDFromContext(ctx context.Context) string {
-	if v := ctx.Value(userIDKey); v != nil {
-		return toString(v)
+// swappableWriter is an [io.Writer] whose destination can be swapped at any
+// time. Its mutex serializes writes from the stream's (two) handlers; the
+// handlers' own locks only serialize within a single handler.
+type swappableWriter struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+func (s *swappableWriter) set(w io.Writer) {
+	s.mu.Lock()
+	s.w = w
+	s.mu.Unlock()
+}
+
+func (s *swappableWriter) swap(w io.Writer) io.Writer {
+	s.mu.Lock()
+	old := s.w
+	s.w = w
+	s.mu.Unlock()
+	return old
+}
+
+func (s *swappableWriter) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.w.Write(p)
+}
+
+// lazyFile opens its path (append-only, creating the directory) on first
+// write. If the file cannot be opened it degrades to a discard and warns
+// once, so a missing log location never breaks the application.
+type lazyFile struct {
+	path    string
+	mu      sync.Mutex
+	file    *os.File
+	missing bool
+}
+
+func newLazyFile(path string) *lazyFile {
+	return &lazyFile{path: path}
+}
+
+func (f *lazyFile) Write(p []byte) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.missing {
+		return len(p), nil
 	}
-	return ""
+	if f.file == nil {
+		if err := os.MkdirAll(filepath.Dir(f.path), 0o750); err != nil {
+			f.missing = true
+			warnOncef("cannot create log directory %q: %v; JSON stream disabled", f.path, err)
+			return len(p), nil
+		}
+		file, err := os.OpenFile(f.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+		if err != nil {
+			f.missing = true
+			warnOncef("cannot open log file %q: %v; JSON stream disabled", f.path, err)
+			return len(p), nil
+		}
+		f.file = file
+	}
+	return f.file.Write(p)
+}
+
+// warnOncef writes a one-time warning to stderr. It writes directly (rather
+// than through a logger) so a logging failure here cannot recurse, and to
+// avoid importing the standard log package in this non-main file.
+func warnOncef(format string, args ...any) {
+	warnOnceMu.Do(func() {
+		fmt.Fprintf(os.Stderr, "mjolnir/log: "+format+"\n", args...)
+	})
+}
+
+// lockedWriter serializes concurrent writes to w.
+type lockedWriter struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+func (l *lockedWriter) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.w.Write(p)
 }

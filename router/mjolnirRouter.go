@@ -1,25 +1,17 @@
 package router
 
 import (
-	"os"
-	"time"
-
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
-	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
 
 	enhancedmiddleware "github.com/dfryer1193/mjolnir/middleware"
 )
 
 // New creates a new pre-configured chi router.
 //
-//nolint:reassign // initialize logger for router
+// Logging is configured by the application (utils/log); the router does not
+// set up a logger.
 func New() *chi.Mux {
-	log.Logger = log.Output(zerolog.ConsoleWriter{
-		Out:        os.Stdout,
-		TimeFormat: time.RFC3339Nano,
-	})
 	r := chi.NewRouter()
 
 	// Add default chi middleware

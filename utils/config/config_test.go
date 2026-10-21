@@ -1,11 +1,20 @@
 package config
 
 import (
+	"io"
 	"testing"
+
+	"github.com/dfryer1193/mjolnir/utils/log"
 )
 
 func TestLoadNoConfigFile(t *testing.T) {
-	c, err := Load()
+	t.Parallel()
+
+	// An isolated loader with a discarded logger: no process-wide state and
+	// no output, so this runs concurrently with everything else.
+	l := newLoader(log.GetLoggerTo("config", io.Discard))
+
+	c, err := l.load()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -15,6 +24,7 @@ func TestLoadNoConfigFile(t *testing.T) {
 }
 
 func TestApplyDefaults(t *testing.T) {
+	t.Parallel()
 	c := make(Config)
 	applyDefaults(c, defaults)
 
@@ -36,6 +46,7 @@ func TestApplyDefaults(t *testing.T) {
 }
 
 func TestValidateRequired(t *testing.T) {
+	t.Parallel()
 	c := make(Config)
 	c["server"] = map[string]any{}
 	c["log"] = map[string]any{}
@@ -56,6 +67,7 @@ func TestValidateRequired(t *testing.T) {
 }
 
 func TestString(t *testing.T) {
+	t.Parallel()
 	c := Config{"test": "value"}
 	s := c.String()
 	if s == "" {
@@ -64,8 +76,17 @@ func TestString(t *testing.T) {
 }
 
 func TestGet(t *testing.T) {
-	c := Get()
+	t.Parallel()
+
+	// Get only works after load; load here so this test does not depend on
+	// TestLoadNoConfigFile having run first.
+	l := newLoader(log.GetLoggerTo("config", io.Discard))
+	if _, err := l.load(); err != nil {
+		t.Fatalf("load: %v", err)
+	}
+
+	c := l.get()
 	if c == nil {
-		t.Fatal("expected non-nil config from Get()")
+		t.Fatal("expected non-nil config from get()")
 	}
 }
