@@ -49,3 +49,22 @@ jobs:
           cache: true
       - name: Build
         run: go build ./...
+
+  check-go-floor:
+    name: Toolchain consistency
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Assert go.mod, ci.yml and README agree on the Go floor
+        run: |
+          set -euo pipefail
+          floor=$(awk '/^go /{print $2}' go.mod | cut -d. -f1,2)
+          [ -n "$floor" ] || { echo "no go directive found in go.mod"; exit 1; }
+          grep -q "Go ${floor} or later" README.md \
+            || { echo "README.md must say 'Go ${floor} or later' (go.mod declares ${floor})"; exit 1; }
+          for v in $(grep "go[-]version:" .github/workflows/ci.yml | grep -oE "[0-9.]+"); do
+            oldest=$(printf '%s\n%s\n' "$v" "$floor" | sort -V | head -1)
+            [ "$oldest" = "$floor" ] \
+              || { echo "ci.yml go-version ${v} is below the go.mod floor ${floor}"; exit 1; }
+          done
+          echo "Go floor ${floor} consistent across go.mod, ci.yml and README"

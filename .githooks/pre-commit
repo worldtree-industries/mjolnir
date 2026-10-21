@@ -1,0 +1,10 @@
+#!/bin/sh
+# Pre-commit gate: nothing lands in history that does not build, vet, and pass tests.
+# Lint runs when the pinned linter is installed (make install-lint); CI runs it regardless.
+set -e
+go build ./...
+go vet ./...
+go test ./...
+if [ -x "$(go env GOPATH)/bin/golangci-lint" ]; then
+  golangci-lint run
+fi
