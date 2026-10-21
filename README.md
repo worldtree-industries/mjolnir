@@ -33,7 +33,7 @@ go get github.com/dfryer1193/mjolnir
 
 ## Requirements
 
-- Go 1.25 or later
+- Go 1.27 or later
 - github.com/go-chi/chi/v5
 - github.com/rs/zerolog
 - github.com/google/uuid

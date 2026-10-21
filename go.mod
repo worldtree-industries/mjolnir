@@ -1,6 +1,6 @@
 module github.com/dfryer1193/mjolnir
 
-go 1.25.0
+go 1.27.0
 
 require (
 	github.com/go-chi/chi/v5 v5.2.1

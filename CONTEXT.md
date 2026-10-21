@@ -44,6 +44,9 @@ Context is the set of data that travels with a log event to enable correlation a
 | **Trace ID** | Identifier for a distributed transaction across services |
 | **Span ID** | Identifier for a specific operation within a trace |
 | **Redaction** | Automatic masking of sensitive data in log messages |
+| **Option** | A container for a value that may be absent |
+| **Present** | An Option holding a non-nil value |
+| **Empty** | An Option holding no value |
 
 ## Design Decisions
 
@@ -55,3 +58,4 @@ Context is the set of data that travels with a log event to enable correlation a
 - **API**: factory creates named loggers: New(name string)
 - **Human-readable stream**: all levels (not just WARN+)
 - **ADR-0001**: decision to use zerolog (not slog), hard-to-reverse
+- **ADR-0002**: Option[T] redesigned around explicit presence (comma-ok `Get()`), module floor go1.27
