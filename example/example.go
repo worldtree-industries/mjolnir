@@ -3,15 +3,17 @@ package main
 import (
 	"fmt"
 	"net/http"
-
-	"github.com/rs/zerolog/log"
+	"os"
 
 	"github.com/dfryer1193/mjolnir/router"
 	"github.com/dfryer1193/mjolnir/utils/errorx"
 	"github.com/dfryer1193/mjolnir/utils/httpx"
+	"github.com/dfryer1193/mjolnir/utils/log"
 )
 
 func main() {
+	lg := log.GetLogger("example")
+
 	r := router.New()
 
 	r.Get("/", errorx.ErrorHandler(
@@ -54,11 +56,12 @@ func main() {
 		}),
 	)
 
-	log.Info().Msg("Server starting on :8080")
+	lg.Info("Server starting on :8080")
 	//nolint:gosec // This is an example server, timeouts configured elsewhere if needed
 	err := http.ListenAndServe(":8080", r)
 	if err != nil {
-		log.Fatal().Err(err).Msg("Server failed to start")
+		lg.Error("Server failed to start", "error", err)
+		os.Exit(1)
 	}
-	log.Info().Msg("Server stopped")
+	lg.Info("Server stopped")
 }

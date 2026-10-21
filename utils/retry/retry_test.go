@@ -7,6 +7,7 @@ import (
 )
 
 func TestDefaultConfig(t *testing.T) {
+	t.Parallel()
 	cfg := DefaultConfig()
 	if cfg.MaxAttempts != 3 {
 		t.Errorf("expected MaxAttempts=3, got %d", cfg.MaxAttempts)
@@ -17,6 +18,7 @@ func TestDefaultConfig(t *testing.T) {
 }
 
 func TestDoSuccess(t *testing.T) {
+	t.Parallel()
 	err := Do(context.TODO(), DefaultConfig(), func() error {
 		return nil
 	})

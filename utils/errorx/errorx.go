@@ -2,11 +2,11 @@ package errorx
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 
-	"github.com/rs/zerolog/log"
-
 	"github.com/dfryer1193/mjolnir/middleware"
+	"github.com/dfryer1193/mjolnir/utils/log"
 )
 
 type ErrorReturningHandler func(w http.ResponseWriter, r *http.Request) *APIError
@@ -72,13 +72,17 @@ func handleError(w http.ResponseWriter, r *http.Request, reqErr *APIError) {
 		w.Header().Set("Content-Type", "application/json")
 		encoder := json.NewEncoder(w)
 		if reqErr.code >= http.StatusInternalServerError {
-			log.Error().
-				Str("request_id", middleware.GetRequestID(r.Context())).
-				Err(reqErr.err).
-				Int("status", reqErr.code).
-				Str("path", r.URL.Path).
-				Str("method", r.Method).
-				Msg("internal server error occurred")
+			var args []any
+			if id := middleware.GetRequestID(r.Context()); id != "" {
+				args = append(args, slog.String("request_id", id))
+			}
+			args = append(args,
+				slog.Any("error", reqErr.err),
+				slog.Int("status", reqErr.code),
+				slog.String("path", r.URL.Path),
+				slog.String("method", r.Method),
+			)
+			log.GetLogger("errorx").ErrorContext(r.Context(), "internal server error occurred", args...)
 
 			w.WriteHeader(reqErr.code)
 			_ = encoder.Encode(ErrorResponse{

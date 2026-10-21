@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Superseded by [ADR-0003](0003-log-slog-logging-foundation.md)
 
 ## Context
 
