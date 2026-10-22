@@ -34,6 +34,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      issues: read
       pull-requests: read
     outputs:
       skip: ${{ steps.plan.outputs.skip }}
@@ -82,15 +83,16 @@ jobs:
             skip "HEAD is already tagged (${tagged}); nothing to do."
           fi
 
-          # Labels are the one thing only the API knows, so retry rather than
-          # let a transient blip decide the version.
+          # Labels live on the issue form of the pull request: there is no
+          # /pulls/{n}/labels endpoint, and asking for one 404s on every run.
+          # Retried, because this is the only fact that needs the API at all.
           bump=
           for attempt in 1 2 3; do
-            if labels=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr}/labels" --jq '.[].name' 2>/dev/null); then
+            if labels=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${pr}/labels" --jq '.[].name' 2>&1); then
               bump=$(printf '%s\n' "$labels" | scripts/release-bump.sh)
               break
             fi
-            echo "reading labels for PR #${pr} failed (attempt ${attempt}); retrying"
+            echo "reading labels for PR #${pr} failed (attempt ${attempt}): ${labels}"
             sleep 3
           done
           if [ -z "$bump" ]; then
