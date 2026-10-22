@@ -19,6 +19,10 @@ Single-context: root `CONTEXT.md` + `docs/adr/`. See `docs/agents/domain.md`.
 - Fresh clone: `make install-lint && make setup-hooks` (pre-commit runs `make verify`, which needs the linter)
 - Releases: merging a PR to `main` tags it; `semver:major` / `semver:minor` labels set the bump, otherwise it is a patch — ADR-0006
 
+## Branches
+
+Branch names never contain slashes. Use hyphens: `add-health-checks`, not `feature/add-health-checks` or `fix/xyz`. A slash reads as a hierarchy, and nothing here needs one.
+
 ## Commits
 
 Commit messages are plain prose (e.g. `Redesign Option[T] around explicit presence`); no type or scope prefixes — not `feat:`, `fix:`, `chore:`, or `optional:`.
