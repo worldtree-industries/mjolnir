@@ -25,6 +25,8 @@ lint:
 	@[ -x "$(GOLANGCI_LINT)" ] || { echo "golangci-lint $(GOLANGCI_VERSION) is not installed: run 'make install-lint'"; exit 1; }
 	$(GOLANGCI_LINT) run
 
+# actionlint also runs shellcheck over run: blocks when shellcheck is on PATH.
+# CI has it and a laptop may not, so CI is the stricter of the two.
 lint-workflows:
 	@[ -x "$(ACTIONLINT)" ] || { echo "actionlint $(ACTIONLINT_VERSION) is not installed: run 'make install-lint'"; exit 1; }
 	$(ACTIONLINT) -color .github/workflows/*.yml

@@ -77,9 +77,11 @@ jobs:
           [ -n "$floor" ] || { echo "no go directive found in go.mod"; exit 1; }
           grep -q "Go ${floor} or later" README.md \
             || { echo "README.md must say 'Go ${floor} or later' (go.mod declares ${floor})"; exit 1; }
-          for v in $(grep -h "go[-]version:" .github/workflows/*.yml | grep -oE "[0-9.]+"); do
+          versions=$(grep -h "go[-]version:" .github/workflows/*.yml | grep -oE "[0-9.]+")
+          [ -n "$versions" ] || { echo "no workflow declares go-version"; exit 1; }
+          while read -r v; do
             oldest=$(printf '%s\n%s\n' "$v" "$floor" | sort -V | head -1)
             [ "$oldest" = "$floor" ] \
               || { echo "workflow go-version ${v} is below the go.mod floor ${floor}"; exit 1; }
-          done
+          done <<< "$versions"
           echo "Go floor ${floor} consistent across go.mod, every workflow and README"
