@@ -45,6 +45,26 @@ jobs:
       - name: Guard the module path against that bump
         run: scripts/check-major-version.sh "$BUMP"
 
+  # The release decision is exercised on every pull request, not only on a
+  # merge. Its label read once 404'd on every release because there is no
+  # /pulls/{n}/labels endpoint, and two green pull requests did not notice.
+  release-plan:
+    name: Release plan (dry run)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - name: Run the release decision against this pull request
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: scripts/release-plan.sh --pr "${{ github.event.pull_request.number }}"
+
   check-go-floor:
     name: Toolchain consistency
     runs-on: ubuntu-latest
@@ -57,9 +77,11 @@ jobs:
           [ -n "$floor" ] || { echo "no go directive found in go.mod"; exit 1; }
           grep -q "Go ${floor} or later" README.md \
             || { echo "README.md must say 'Go ${floor} or later' (go.mod declares ${floor})"; exit 1; }
-          for v in $(grep -h "go[-]version:" .github/workflows/*.yml | grep -oE "[0-9.]+"); do
+          versions=$(grep -h "go[-]version:" .github/workflows/*.yml | grep -oE "[0-9.]+")
+          [ -n "$versions" ] || { echo "no workflow declares go-version"; exit 1; }
+          while read -r v; do
             oldest=$(printf '%s\n%s\n' "$v" "$floor" | sort -V | head -1)
             [ "$oldest" = "$floor" ] \
               || { echo "workflow go-version ${v} is below the go.mod floor ${floor}"; exit 1; }
-          done
+          done <<< "$versions"
           echo "Go floor ${floor} consistent across go.mod, every workflow and README"
