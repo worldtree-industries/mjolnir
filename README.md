@@ -1,10 +1,10 @@
 # Mjolnir
 
-Mjolnir is an opinionated wrapper around [go-chi/chi](https://github.com/go-chi/chi) that provides enhanced middleware and utilities for building HTTP services in Go. It adds structured logging, request ID tracking, and standardized error handling out of the box.
+Mjolnir is an opinionated wrapper around [go-chi/chi](https://github.com/go-chi/chi) that provides enhanced middleware and utilities for building HTTP services in Go. It adds structured logging, request ID tracking, health checks, and standardized error handling out of the box.
 
 ## Features
 
-- **Request Logging**: Built-in zerolog-based structured logging middleware that captures:
+- **Request Logging**: Built-in slog-based structured logging middleware that captures:
   - Request ID
   - HTTP method
   - Path
@@ -18,12 +18,16 @@ Mjolnir is an opinionated wrapper around [go-chi/chi](https://github.com/go-chi/
   - Adds request ID to response headers
   - Available throughout the request context
 
+- **Health Checks**: Probe endpoints wired by the router itself, with startup and readiness checks required at construction
+  - `/livez`, `/readyz`, and `/startupz`
+  - Automatic drain on SIGINT or SIGTERM, with readiness as the drain signal
+
 - **Standardized Error Handling**: Comprehensive error management system
   - Consistent JSON error responses
   - Automatic internal error logging
   - Panic recovery
   - Helper functions for common HTTP status codes
-  - Context-based error propagation
+  - Handlers return an `*errorx.APIError` instead of writing the response themselves
 
 ## Installation
 
@@ -35,8 +39,8 @@ go get github.com/dfryer1193/mjolnir
 
 - Go 1.27 or later
 - github.com/go-chi/chi/v5
-- github.com/rs/zerolog
 - github.com/google/uuid
+- github.com/jackc/pgx/v5
 
 ## Usage
 
@@ -47,20 +51,25 @@ package main
 
 import (
   "net/http"
+  "os"
   "time"
 
   "github.com/dfryer1193/mjolnir/health"
   "github.com/dfryer1193/mjolnir/router"
   "github.com/dfryer1193/mjolnir/utils/httpx"
+  "github.com/dfryer1193/mjolnir/utils/log"
 )
 
 func main() {
+  lg := log.GetLogger("app")
+
   r, err := router.New(health.Config{
     Started: health.AlwaysStarted,
     Ready:   health.AlwaysReady,
   })
   if err != nil {
-    panic(err)
+    lg.Error("failed to build router", "error", err)
+    os.Exit(1)
   }
 
   r.Get("/", func(w http.ResponseWriter, r *http.Request) {
@@ -78,7 +87,8 @@ func main() {
   }
 
   if err := r.Run(srv, 10*time.Second); err != nil {
-    panic(err)
+    lg.Error("server failed", "error", err)
+    os.Exit(1)
   }
 }
 ```
@@ -151,26 +161,30 @@ if !httpx.ValidateContentType(r, "application/json") {
 ```
 
 ### Error Handling Utilities
-Mjolnir provides convenient error handling functions:
+
+Handlers return a `*errorx.APIError` and `errorx.ErrorHandler` writes the
+response. With `github.com/dfryer1193/mjolnir/utils/errorx` imported:
+
 ```go
-middleware.SetError(r, status, err)           // Generic error
-middleware.SetInternalError(r, err)           // 500 Internal Server Error
-middleware.SetBadRequestError(r, err)         // 400 Bad Request
-middleware.SetNotFoundError(r, err)           // 404 Not Found
-middleware.SetUnauthorizedError(r, err)       // 401 Unauthorized
+r.Get("/thing", errorx.ErrorHandler(
+  func(w http.ResponseWriter, r *http.Request) *errorx.APIError {
+    if err := doThing(); err != nil {
+      return errorx.BadRequestErr(err)
+    }
+    return nil
+  }),
+))
 ```
 
-#### General Usage
-To handle errors in logic, you can use `SetError` (or any of the more specific error handling functions) at the site of the error to be handled by the error handling middleware.
-```go
-r.Get("/error", func(w http.ResponseWriter, r *http.Request) {
-	middleware.SetError(r, 504, errors.New("this is an error"))
-})
-```
+The helpers are `errorx.BadRequestErr`, `errorx.UnauthorizedErr`, and
+`errorx.InternalServerErr`; `errorx.NewAPIError(err, status)` covers any other
+code.
 
 ### Error Response Format
 
-All errors are returned as JSON with the following structure:
+Errors reported through `errorx` are returned as JSON with the following
+structure (the health probes are the exception: they answer 200/503 with an
+empty body):
 
 ```json
 {
@@ -184,10 +198,11 @@ All errors are returned as JSON with the following structure:
 The error handler distinguishes between internal (500-level) and other errors:
 
 - **Internal Server Errors (500+)**:
-  - Logs the full error details including stack trace to the server logs
-  - Returns a generic "Internal Server Error" message to the client
+  - Logs the full error details to the server logs
+  - Returns a generic "Internal Server Error" body to the client
   - Includes request ID in logs for correlation
-  - Always returns status code 500
+  - Keeps the status code the handler chose, while the body's `code` is always
+    500 (the mismatch is tracked in #20)
 
 Example internal error response:
 ```json
