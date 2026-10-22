@@ -13,7 +13,7 @@ The router is already opinionated about wiring: `router.New` installs `RequestID
 ## Decision
 
 - **`health` package.** `ReadyFunc` and `StartedFunc` are both `func(context.Context) bool`; the caller handles and logs its own errors. `AlwaysReady` and `AlwaysStarted` exist for apps with nothing to check. The `bool` is deliberate: it keeps the library out of the caller's error vocabulary and keeps `errorx` (issue #20) out of the probe path.
-- **`router.New(health.Config{Started, Ready}) (*chi.Mux, error)`** mounts `/livez`, `/readyz`, and `/startupz`. Both functions are mandatory; a nil one is an error naming which is missing, and `main` exits non-zero. ADR-0004 stands: the library never calls `os.Exit`.
+- **`router.New(health.Config{Started, Ready}) (*Router, error)`** returns a `Router` that embeds `*chi.Mux` — still an `http.Handler` with chi's route methods — and mounts `/livez`, `/readyz`, and `/startupz`. Both functions are mandatory; a nil one is an error naming which is missing, and `main` exits non-zero. ADR-0004 stands: the library never calls `os.Exit`.
 - **`/livez` is a constant 200.** No callbacks, no configuration. It answers "is this process wedged", not "is everything fine", so it cannot be dragged down by a dependency.
 - **`/startupz` latches.** `StartedFunc` is called with the request context until it first returns true; afterwards the handler answers 200 without calling it again. Started is a one-time milestone, not a state.
 - **`/readyz` calls `ReadyFunc` on every request.** Readiness is a state and is expected to flap.

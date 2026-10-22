@@ -46,24 +46,30 @@ go get github.com/dfryer1193/mjolnir
 package main
 
 import (
+  "net/http"
+
+  "github.com/dfryer1193/mjolnir/health"
   "github.com/dfryer1193/mjolnir/router"
   "github.com/dfryer1193/mjolnir/utils/httpx"
-  "github.com/rs/zerolog/log"
-  "net/http"
 )
 
 func main() {
-  r := router.New()
+  r, err := router.New(health.Config{
+    Started: health.AlwaysStarted,
+    Ready:   health.AlwaysReady,
+  })
+  if err != nil {
+    panic(err)
+  }
 
   r.Get("/", func(w http.ResponseWriter, r *http.Request) {
-    httpx.RespondJSON(w, r, 200, map[string]string{"msg": "Hello World!"})
+    httpx.RespondJSON(w, r, http.StatusOK, map[string]string{"msg": "Hello World!"})
   })
 
   r.Get("/panic", func(w http.ResponseWriter, r *http.Request) {
     panic("This is a panic")
   })
 
-  log.Info().Msg("Server starting on :8080")
   http.ListenAndServe(":8080", r)
 }
 ```
