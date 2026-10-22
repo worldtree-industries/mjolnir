@@ -62,10 +62,17 @@ jobs:
             skip "HEAD is not a merge commit; ignoring this push (no release)."
           fi
 
-          pr=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/pulls" \
-                 --jq '[.[] | select(.merged_at != null)][0].number // empty')
+          # The pull request comes from the merge commit's own subject, not from
+          # asking GitHub which PR a commit belongs to: that association is not
+          # queryable for the first seconds after a merge. Run 39791109799 asked
+          # nine seconds after its merge and got a 404; the same commit answered
+          # [24] four minutes later, which failed a good release and cut no tag.
+          pr=$(git log -1 --format=%s | sed -n 's/^Merge pull request #\([0-9][0-9]*\) .*/\1/p')
           if [ -z "$pr" ]; then
-            skip "No merged pull request for ${GITHUB_SHA}; ignoring this push (no release)."
+            echo "HEAD is a merge commit, but its subject does not name a pull request:"
+            git log -1 --format='  %s'
+            echo "Tag this one by hand, or restore GitHub's default merge message."
+            exit 1
           fi
 
           # Checked before the guard on purpose: a re-run would otherwise bump
@@ -75,8 +82,21 @@ jobs:
             skip "HEAD is already tagged (${tagged}); nothing to do."
           fi
 
-          bump=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr}/labels" \
-                   --jq '.[].name' | scripts/release-bump.sh)
+          # Labels are the one thing only the API knows, so retry rather than
+          # let a transient blip decide the version.
+          bump=
+          for attempt in 1 2 3; do
+            if labels=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr}/labels" --jq '.[].name' 2>/dev/null); then
+              bump=$(printf '%s\n' "$labels" | scripts/release-bump.sh)
+              break
+            fi
+            echo "reading labels for PR #${pr} failed (attempt ${attempt}); retrying"
+            sleep 3
+          done
+          if [ -z "$bump" ]; then
+            echo "could not read the labels of PR #${pr}; refusing to guess a version" >&2
+            exit 1
+          fi
           echo "merged PR #${pr} requests bump: ${bump}"
 
           scripts/check-major-version.sh "$bump"
