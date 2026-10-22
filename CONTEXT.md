@@ -44,6 +44,9 @@ A component that formats and delivers log events to a destination. The framework
 | **Liveness** | The process is running and can accept connections; failure means restart |
 | **Readiness** | The process can serve traffic right now; failure means remove from traffic, never restart |
 | **Drain** | The window between shutdown being requested and the server closing: readiness reports 503, the process keeps serving, then in-flight requests finish |
+| **Release Tag** | A lightweight `vX.Y.Z` tag on a merge commit to `main`; the release itself, since a library publishes no artifacts (ADR-0006) |
+| **Bump** | The requested version step for a merge: `semver:major` or `semver:minor` from the pull request's labels, `patch` otherwise (ADR-0006) |
+| **Version Guard** | The check that the `go.mod` module path's `/vN` suffix matches the major version a bump would publish; blocks merging and runs again before tagging |
 
 ## Design Decisions
 
@@ -57,3 +60,4 @@ A component that formats and delivers log events to a destination. The framework
 - **Test seam**: `UseOutputForTests` redirects both sinks; documented as for tests only
 - **ADR-0002**: Option[T] redesigned around explicit presence (comma-ok `Get()`), module floor go1.27
 - **Health surface**: `/livez` (constant 200), `/readyz` (flappable `ReadyFunc`), `/startupz` (latched `StartedFunc`); both functions are required at `router.New` — ADR-0005
+- **Releases happen on merge**: the merge commit to `main` is tagged, bumped by the merged pull request's labels (`patch` by default), and only when the version guard's module-path suffix matches — ADR-0006

@@ -4,6 +4,8 @@
 
 Accepted.
 
+Amended by ADR-0006: the `v2.0.0` tag referenced below no longer exists in this repository, and a major release is now possible once the module path is renamed to `/v2`.
+
 ## Context
 
 Apps importing mjolnir had no health surface, so every consumer would hand-roll probes — and the failure modes are asymmetric. A liveness probe that checks a dependency turns a database outage into a restart loop. A readiness probe that never fails leaves a broken pod in rotation. A startup probe that checks a dependency kills the container before it has ever finished starting. The probe *contracts* differ; only their endpoint shape looks similar.

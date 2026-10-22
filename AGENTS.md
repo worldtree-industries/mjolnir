@@ -14,8 +14,10 @@ Single-context: root `CONTEXT.md` + `docs/adr/`. See `docs/agents/domain.md`.
 
 ## Tooling
 
-- Lint: `make install-lint && make lint` (golangci-lint; version pinned in the Makefile and `.github/workflows/ci.yml`)
-- Fresh clone: `make setup-hooks` (pre-commit runs build, vet, tests, and lint when installed)
+- Verify: `make verify` (build, vet, lint, race tests) — the same target pre-commit and CI run
+- Lint alone: `make install-lint && make lint` (golangci-lint; the Makefile holds the only version pin, and CI installs from it)
+- Fresh clone: `make install-lint && make setup-hooks` (pre-commit runs `make verify`, which needs the linter)
+- Releases: merging a PR to `main` tags it; `semver:major` / `semver:minor` labels set the bump, otherwise it is a patch — ADR-0006
 
 ## Commits
 
