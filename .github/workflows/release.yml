@@ -1,0 +1,108 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# Never cancel a release half-way: a cancelled run could push a tag without the
+# verify job that was meant to gate it having finished.
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: '1.27'
+          cache: true
+      - name: Install golangci-lint
+        run: make install-lint
+      - name: Verify
+        run: make verify
+
+  version-guard:
+    name: Version guard
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      skip: ${{ steps.plan.outputs.skip }}
+      tag: ${{ steps.plan.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - name: Decide whether this push releases, and at which version
+        id: plan
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          skip() {
+            echo "skip=1" >> "$GITHUB_OUTPUT"
+            echo "$1"
+            exit 0
+          }
+
+          # Only a merge releases. A direct push to main is still verified above,
+          # but it never moves the version.
+          if [ "$(git rev-list --parents -n 1 HEAD | wc -w | tr -d ' ')" -lt 3 ]; then
+            skip "HEAD is not a merge commit; ignoring this push (no release)."
+          fi
+
+          pr=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/pulls" \
+                 --jq '[.[] | select(.merged_at != null)][0].number // empty')
+          if [ -z "$pr" ]; then
+            skip "No merged pull request for ${GITHUB_SHA}; ignoring this push (no release)."
+          fi
+
+          # Checked before the guard on purpose: a re-run would otherwise bump
+          # from the tag already sitting on HEAD and demand the next major.
+          tagged=$(git tag --points-at HEAD | tr '\n' ' ')
+          if [ -n "$tagged" ]; then
+            skip "HEAD is already tagged (${tagged}); nothing to do."
+          fi
+
+          bump=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr}/labels" \
+                   --jq '.[].name' | scripts/release-bump.sh)
+          echo "merged PR #${pr} requests bump: ${bump}"
+
+          scripts/check-major-version.sh "$bump"
+
+          next=$(scripts/next-version.sh "$bump")
+          echo "next release: ${next}"
+          echo "skip=0" >> "$GITHUB_OUTPUT"
+          echo "tag=${next}" >> "$GITHUB_OUTPUT"
+
+  tag:
+    name: Tag
+    needs: [verify, version-guard]
+    if: needs.version-guard.outputs.skip == '0'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - name: Push the release tag
+        env:
+          TAG: ${{ needs.version-guard.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git tag "$TAG"
+          git push origin "$TAG"
+          echo "released ${TAG}"

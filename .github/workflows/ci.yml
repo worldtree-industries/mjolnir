@@ -1,14 +1,19 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  lint:
-    name: Lint
+  verify:
+    name: Verify
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -18,53 +23,43 @@ jobs:
           go-version: '1.27'
           cache: true
       - name: Install golangci-lint
-        uses: golangci/golangci-lint-action@v9
-        with:
-          version: v2.14
-      - name: Run lint
-        run: golangci-lint run ./...
+        run: make install-lint
+      - name: Verify
+        run: make verify
 
-  test:
-    name: Test
+  version-guard:
+    name: Version guard
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - name: Set up Go
-        uses: actions/setup-go@v7
         with:
-          go-version: '1.27'
-          cache: true
-      - name: Run tests
-        run: go test ./...
-
-  build:
-    name: Build
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - name: Set up Go
-        uses: actions/setup-go@v7
-        with:
-          go-version: '1.27'
-          cache: true
-      - name: Build
-        run: go build ./...
+          fetch-depth: 0
+      - name: Read the requested bump from the PR labels
+        env:
+          LABELS: ${{ toJSON(github.event.pull_request.labels) }}
+        run: |
+          set -euo pipefail
+          bump=$(printf '%s' "$LABELS" | jq -r '.[].name' | scripts/release-bump.sh)
+          echo "requested bump: ${bump}"
+          echo "BUMP=${bump}" >> "$GITHUB_ENV"
+      - name: Guard the module path against that bump
+        run: scripts/check-major-version.sh "$BUMP"
 
   check-go-floor:
     name: Toolchain consistency
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - name: Assert go.mod, ci.yml and README agree on the Go floor
+      - name: Assert go.mod, every workflow and README agree on the Go floor
         run: |
           set -euo pipefail
           floor=$(awk '/^go /{print $2}' go.mod | cut -d. -f1,2)
           [ -n "$floor" ] || { echo "no go directive found in go.mod"; exit 1; }
           grep -q "Go ${floor} or later" README.md \
             || { echo "README.md must say 'Go ${floor} or later' (go.mod declares ${floor})"; exit 1; }
-          for v in $(grep "go[-]version:" .github/workflows/ci.yml | grep -oE "[0-9.]+"); do
+          for v in $(grep -h "go[-]version:" .github/workflows/*.yml | grep -oE "[0-9.]+"); do
             oldest=$(printf '%s\n%s\n' "$v" "$floor" | sort -V | head -1)
             [ "$oldest" = "$floor" ] \
-              || { echo "ci.yml go-version ${v} is below the go.mod floor ${floor}"; exit 1; }
+              || { echo "workflow go-version ${v} is below the go.mod floor ${floor}"; exit 1; }
           done
-          echo "Go floor ${floor} consistent across go.mod, ci.yml and README"
+          echo "Go floor ${floor} consistent across go.mod, every workflow and README"
