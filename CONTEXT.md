@@ -39,6 +39,10 @@ A component that formats and delivers log events to a destination. The framework
 | **Option** | A container for a value that may be absent |
 | **Present** | An Option holding a non-nil value |
 | **Empty** | An Option holding no value |
+| **Health** | The umbrella HTTP surface reporting whether the process is started, alive, and ready to serve traffic |
+| **Startup** | Initialization complete: the one-time milestone after which the startup probe succeeds; never a dependency check |
+| **Liveness** | The process is running and can accept connections; failure means restart |
+| **Readiness** | The process can serve traffic right now; failure means remove from traffic, never restart |
 
 ## Design Decisions
 
@@ -51,3 +55,4 @@ A component that formats and delivers log events to a destination. The framework
 - **No package-level Fatal**: callers that must terminate log at Error and exit themselves
 - **Test seam**: `UseOutputForTests` redirects both sinks; documented as for tests only
 - **ADR-0002**: Option[T] redesigned around explicit presence (comma-ok `Get()`), module floor go1.27
+- **Health surface**: `/livez` (constant 200), `/readyz` (flappable `ReadyFunc`), `/startupz` (latched `StartedFunc`); both functions are required at `router.New` — ADR-0005
