@@ -45,6 +45,26 @@ jobs:
       - name: Guard the module path against that bump
         run: scripts/check-major-version.sh "$BUMP"
 
+  # The release decision is exercised on every pull request, not only on a
+  # merge. Its label read once 404'd on every release because there is no
+  # /pulls/{n}/labels endpoint, and two green pull requests did not notice.
+  release-plan:
+    name: Release plan (dry run)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - name: Run the release decision against this pull request
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: scripts/release-plan.sh --pr "${{ github.event.pull_request.number }}"
+
   check-go-floor:
     name: Toolchain consistency
     runs-on: ubuntu-latest

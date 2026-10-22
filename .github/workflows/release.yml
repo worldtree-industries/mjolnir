@@ -1,8 +1,12 @@
 name: Release
 
 on:
+  # A push to main releases. workflow_dispatch runs the same decision without
+  # publishing anything, because Tag is push-only: the release path can be
+  # exercised before a real merge depends on it.
   push:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -48,70 +52,12 @@ jobs:
         id: plan
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-
-          skip() {
-            echo "skip=1" >> "$GITHUB_OUTPUT"
-            echo "$1"
-            exit 0
-          }
-
-          # Only a merge releases. A direct push to main is still verified above,
-          # but it never moves the version.
-          if [ "$(git rev-list --parents -n 1 HEAD | wc -w | tr -d ' ')" -lt 3 ]; then
-            skip "HEAD is not a merge commit; ignoring this push (no release)."
-          fi
-
-          # The pull request comes from the merge commit's own subject, not from
-          # asking GitHub which PR a commit belongs to: that association is not
-          # queryable for the first seconds after a merge. Run 39791109799 asked
-          # nine seconds after its merge and got a 404; the same commit answered
-          # [24] four minutes later, which failed a good release and cut no tag.
-          pr=$(git log -1 --format=%s | sed -n 's/^Merge pull request #\([0-9][0-9]*\) .*/\1/p')
-          if [ -z "$pr" ]; then
-            echo "HEAD is a merge commit, but its subject does not name a pull request:"
-            git log -1 --format='  %s'
-            echo "Tag this one by hand, or restore GitHub's default merge message."
-            exit 1
-          fi
-
-          # Checked before the guard on purpose: a re-run would otherwise bump
-          # from the tag already sitting on HEAD and demand the next major.
-          tagged=$(git tag --points-at HEAD | tr '\n' ' ')
-          if [ -n "$tagged" ]; then
-            skip "HEAD is already tagged (${tagged}); nothing to do."
-          fi
-
-          # Labels live on the issue form of the pull request: there is no
-          # /pulls/{n}/labels endpoint, and asking for one 404s on every run.
-          # Retried, because this is the only fact that needs the API at all.
-          bump=
-          for attempt in 1 2 3; do
-            if labels=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${pr}/labels" --jq '.[].name' 2>&1); then
-              bump=$(printf '%s\n' "$labels" | scripts/release-bump.sh)
-              break
-            fi
-            echo "reading labels for PR #${pr} failed (attempt ${attempt}): ${labels}"
-            sleep 3
-          done
-          if [ -z "$bump" ]; then
-            echo "could not read the labels of PR #${pr}; refusing to guess a version" >&2
-            exit 1
-          fi
-          echo "merged PR #${pr} requests bump: ${bump}"
-
-          scripts/check-major-version.sh "$bump"
-
-          next=$(scripts/next-version.sh "$bump")
-          echo "next release: ${next}"
-          echo "skip=0" >> "$GITHUB_OUTPUT"
-          echo "tag=${next}" >> "$GITHUB_OUTPUT"
+        run: scripts/release-plan.sh
 
   tag:
     name: Tag
     needs: [verify, version-guard]
-    if: needs.version-guard.outputs.skip == '0'
+    if: needs.version-guard.outputs.skip == '0' && github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: write
