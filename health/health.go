@@ -50,9 +50,10 @@ var (
 
 // Health owns the probe handlers and the state behind them.
 type Health struct {
-	ready   ReadyFunc
-	started StartedFunc
-	latched atomic.Bool
+	ready    ReadyFunc
+	started  StartedFunc
+	latched  atomic.Bool
+	draining atomic.Bool
 }
 
 // New builds a Health from cfg, rejecting a missing check.
@@ -77,10 +78,11 @@ func (h *Health) Liveness() http.Handler {
 	})
 }
 
-// Readiness reports whether the process can serve traffic now.
+// Readiness reports whether the process can serve traffic now. Once the
+// process is draining it answers 503 without consulting ReadyFunc.
 func (h *Health) Readiness() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		writeStatus(w, h.ready(r.Context()))
+		writeStatus(w, !h.draining.Load() && h.ready(r.Context()))
 	})
 }
 
@@ -94,6 +96,16 @@ func (h *Health) Startup() http.Handler {
 
 		writeStatus(w, h.latched.Load())
 	})
+}
+
+// Drain marks the process as shutting down.
+//
+// Readiness answers 503 from then on without consulting ReadyFunc, whose
+// dependencies may already be closing. Liveness keeps answering 200: a
+// restart in the middle of a drain would interrupt the requests being
+// finished.
+func (h *Health) Drain() {
+	h.draining.Store(true)
 }
 
 // writeStatus answers 200 when healthy and 503 otherwise, with an empty body

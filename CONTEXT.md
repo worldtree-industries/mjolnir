@@ -43,6 +43,7 @@ A component that formats and delivers log events to a destination. The framework
 | **Startup** | Initialization complete: the one-time milestone after which the startup probe succeeds; never a dependency check |
 | **Liveness** | The process is running and can accept connections; failure means restart |
 | **Readiness** | The process can serve traffic right now; failure means remove from traffic, never restart |
+| **Drain** | The window between shutdown being requested and the server closing: readiness reports 503, the process keeps serving, then in-flight requests finish |
 
 ## Design Decisions
 

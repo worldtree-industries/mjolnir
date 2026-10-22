@@ -4,12 +4,18 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/dfryer1193/mjolnir/health"
 	"github.com/dfryer1193/mjolnir/router"
 	"github.com/dfryer1193/mjolnir/utils/errorx"
 	"github.com/dfryer1193/mjolnir/utils/httpx"
 	"github.com/dfryer1193/mjolnir/utils/log"
+)
+
+const (
+	readHeaderTimeout = 5 * time.Second
+	drainWindow       = 10 * time.Second
 )
 
 func main() {
@@ -65,11 +71,17 @@ func main() {
 	)
 
 	lg.Info("Server starting on :8080")
-	//nolint:gosec // This is an example server, timeouts configured elsewhere if needed
-	err = http.ListenAndServe(":8080", r)
-	if err != nil {
-		lg.Error("Server failed to start", "error", err)
+
+	srv := &http.Server{
+		Addr:              ":8080",
+		Handler:           r,
+		ReadHeaderTimeout: readHeaderTimeout,
+	}
+
+	if runErr := r.Run(srv, drainWindow); runErr != nil {
+		lg.Error("Server failed", "error", runErr)
 		os.Exit(1)
 	}
+
 	lg.Info("Server stopped")
 }

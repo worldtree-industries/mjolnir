@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -141,6 +144,193 @@ func TestUserRoutesStillWork(t *testing.T) {
 	}
 }
 
+func TestServeServesUntilContextIsCancelled(t *testing.T) {
+	r, srv, base := startServer(t, health.Config{
+		Started: health.AlwaysStarted,
+		Ready:   health.AlwaysReady,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+
+	go func() { errCh <- r.Serve(ctx, srv, 50*time.Millisecond) }()
+
+	waitForStatus(t, base+"/livez", http.StatusOK)
+	waitForStatus(t, base+"/readyz", http.StatusOK)
+
+	cancel()
+
+	if err := waitForServe(t, errCh); err != nil {
+		t.Fatalf("Serve: %v", err)
+	}
+}
+
+func TestServeDrainsBeforeShuttingDown(t *testing.T) {
+	var calls atomic.Int32
+
+	r, srv, base := startServer(t, health.Config{
+		Started: health.AlwaysStarted,
+		Ready: func(context.Context) bool {
+			calls.Add(1)
+			return true
+		},
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+
+	go func() { errCh <- r.Serve(ctx, srv, 300*time.Millisecond) }()
+
+	waitForStatus(t, base+"/livez", http.StatusOK)
+	waitForStatus(t, base+"/readyz", http.StatusOK)
+
+	callsBeforeDrain := calls.Load()
+
+	cancel()
+
+	// Readiness flips as soon as the drain starts, without consulting the
+	// check: its dependencies may already be closing.
+	waitForStatus(t, base+"/readyz", http.StatusServiceUnavailable)
+
+	// Liveness keeps answering while the process drains.
+	if code := statusOf(t, base+"/livez"); code != http.StatusOK {
+		t.Fatalf("liveness during drain = %d, want %d", code, http.StatusOK)
+	}
+
+	if got := calls.Load(); got != callsBeforeDrain {
+		t.Fatalf("ReadyFunc called %d times while draining, want 0", got-callsBeforeDrain)
+	}
+
+	if err := waitForServe(t, errCh); err != nil {
+		t.Fatalf("Serve: %v", err)
+	}
+}
+
+func TestServeLogsTheDrain(t *testing.T) {
+	var buf bytes.Buffer
+
+	restore := log.UseOutputForTests(&buf)
+	defer restore()
+
+	r, srv, base := startServer(t, health.Config{
+		Started: health.AlwaysStarted,
+		Ready:   health.AlwaysReady,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+
+	go func() { errCh <- r.Serve(ctx, srv, 20*time.Millisecond) }()
+
+	waitForStatus(t, base+"/livez", http.StatusOK)
+
+	cancel()
+
+	if err := waitForServe(t, errCh); err != nil {
+		t.Fatalf("Serve: %v", err)
+	}
+
+	line := buf.String()
+	if !strings.Contains(line, "draining") || !strings.Contains(line, "drained") {
+		t.Fatalf("drain logs missing, got %q", line)
+	}
+}
+
+func TestServeFinishesInFlightRequests(t *testing.T) {
+	r, srv, base := startServer(t, health.Config{
+		Started: health.AlwaysStarted,
+		Ready:   health.AlwaysReady,
+	})
+
+	requestStarted := make(chan struct{})
+
+	r.Get("/slow", func(w http.ResponseWriter, _ *http.Request) {
+		close(requestStarted)
+		time.Sleep(50 * time.Millisecond)
+		w.WriteHeader(http.StatusOK)
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+
+	go func() { errCh <- r.Serve(ctx, srv, 300*time.Millisecond) }()
+
+	waitForStatus(t, base+"/livez", http.StatusOK)
+
+	slowStatus := make(chan int, 1)
+
+	go func() { slowStatus <- statusOf(t, base+"/slow") }()
+
+	<-requestStarted
+
+	cancel()
+
+	if code := <-slowStatus; code != http.StatusOK {
+		t.Fatalf("in-flight request = %d, want %d", code, http.StatusOK)
+	}
+	if err := waitForServe(t, errCh); err != nil {
+		t.Fatalf("Serve: %v", err)
+	}
+}
+
+func TestServeWithZeroDrainShutsDownImmediately(t *testing.T) {
+	r, srv, base := startServer(t, health.Config{
+		Started: health.AlwaysStarted,
+		Ready:   health.AlwaysReady,
+	})
+
+	requestStarted := make(chan struct{})
+
+	r.Get("/slow", func(w http.ResponseWriter, _ *http.Request) {
+		close(requestStarted)
+		time.Sleep(100 * time.Millisecond)
+		w.WriteHeader(http.StatusOK)
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+
+	go func() { errCh <- r.Serve(ctx, srv, 0) }()
+
+	waitForStatus(t, base+"/livez", http.StatusOK)
+
+	slowStatus := make(chan int, 1)
+
+	go func() { slowStatus <- statusOf(t, base+"/slow") }()
+
+	<-requestStarted
+
+	cancel()
+
+	// A request is still in flight and the shutdown deadline is zero: the
+	// server closes rather than reporting a deadline it never had time to meet.
+	if err := waitForServe(t, errCh); err != nil {
+		t.Fatalf("Serve: %v", err)
+	}
+
+	if code := statusOf(t, base+"/livez"); code != 0 {
+		t.Fatalf("server still answering after shutdown with status %d", code)
+	}
+}
+
+func TestServeReturnsServerErrors(t *testing.T) {
+	r := mustNew(t, health.Config{Started: health.AlwaysStarted, Ready: health.AlwaysReady})
+
+	addr := freeAddr(t)
+
+	listener, listenErr := net.Listen("tcp", addr)
+	if listenErr != nil {
+		t.Fatalf("listen: %v", listenErr)
+	}
+	defer listener.Close()
+
+	srv := &http.Server{Addr: addr, Handler: r, ReadHeaderTimeout: time.Second}
+
+	if err := r.Serve(context.Background(), srv, 0); err == nil {
+		t.Fatal("Serve returned nil for an address already in use")
+	}
+}
+
 func mustNew(t *testing.T, cfg health.Config) *router.Router {
 	t.Helper()
 
@@ -169,4 +359,85 @@ func probe(t *testing.T, handler http.Handler, method, path string, wantStatus i
 	if ct := rec.Header().Get("Content-Type"); ct != "" {
 		t.Fatalf("%s %s: Content-Type = %q, want unset", method, path, ct)
 	}
+}
+
+// probeTimeout bounds test requests so a wedged server fails the test instead
+// of hanging it.
+const probeTimeout = 2 * time.Second
+
+// startServer builds a router and a server on a free loopback port. Serve is
+// left to the caller so each test controls the lifetime.
+func startServer(t *testing.T, cfg health.Config) (*router.Router, *http.Server, string) {
+	t.Helper()
+
+	r := mustNew(t, cfg)
+	addr := freeAddr(t)
+	srv := &http.Server{Addr: addr, Handler: r, ReadHeaderTimeout: time.Second}
+
+	t.Cleanup(func() { _ = srv.Close() })
+
+	return r, srv, "http://" + addr
+}
+
+func freeAddr(t *testing.T) string {
+	t.Helper()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer listener.Close()
+
+	return listener.Addr().String()
+}
+
+func waitForServe(t *testing.T, errCh <-chan error) error {
+	t.Helper()
+
+	select {
+	case err := <-errCh:
+		return err
+	case <-time.After(5 * time.Second):
+		t.Fatal("Serve did not return")
+		return nil
+	}
+}
+
+func waitForStatus(t *testing.T, url string, want int) {
+	t.Helper()
+
+	deadline := time.Now().Add(2 * time.Second)
+
+	for time.Now().Before(deadline) {
+		if statusOf(t, url) == want {
+			return
+		}
+
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	t.Fatalf("%s never returned %d", url, want)
+}
+
+// statusOf returns the response status, or 0 when the server cannot be
+// reached.
+func statusOf(t *testing.T, url string) int {
+	t.Helper()
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+
+	client := &http.Client{Timeout: probeTimeout}
+
+	resp, doErr := client.Do(req)
+	if doErr != nil {
+		return 0
+	}
+	defer resp.Body.Close()
+
+	_, _ = io.Copy(io.Discard, resp.Body)
+
+	return resp.StatusCode
 }

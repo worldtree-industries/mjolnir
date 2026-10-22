@@ -47,6 +47,7 @@ package main
 
 import (
   "net/http"
+  "time"
 
   "github.com/dfryer1193/mjolnir/health"
   "github.com/dfryer1193/mjolnir/router"
@@ -70,9 +71,65 @@ func main() {
     panic("This is a panic")
   })
 
-  http.ListenAndServe(":8080", r)
+  srv := &http.Server{
+    Addr:              ":8080",
+    Handler:           r,
+    ReadHeaderTimeout: 5 * time.Second,
+  }
+
+  if err := r.Run(srv, 10*time.Second); err != nil {
+    panic(err)
+  }
 }
 ```
+
+### Health Checks
+
+Every router carries three probes. The startup and readiness functions are
+required: `router.New` returns an error naming the one that is missing, so an
+application cannot start without a health surface.
+
+```go
+r, err := router.New(health.Config{
+  Started: health.AlwaysStarted,                   // initialization complete
+  Ready:   func(ctx context.Context) bool { ... }, // consulted per probe
+})
+```
+
+| Path | Meaning | Behaviour |
+| --- | --- | --- |
+| `/livez` | the process is not wedged | always 200; a failure means "restart me" |
+| `/readyz` | the process can serve traffic now | 200/503 from `ReadyFunc`, on every request |
+| `/startupz` | initialization is complete | 200 once `StartedFunc` first returns true, latched |
+
+Responses are 200/503 with an empty body and no content type; other methods get
+405. Probes appear in the request log like any other request.
+
+`StartedFunc` must never check a dependency. A failing startup probe kills the
+container, which turns an outage into a restart loop — report dependencies from
+`ReadyFunc` instead.
+
+### Graceful shutdown
+
+`Router.Run` starts the drain on SIGINT or SIGTERM; `Router.Serve` does the same
+when the context you pass is cancelled.
+
+1. `/readyz` answers 503 without consulting `ReadyFunc`.
+2. The server keeps serving for the drain duration, so load balancers stop
+   routing to the process.
+3. `Shutdown` runs with the same duration as its deadline, letting in-flight
+   requests finish.
+
+`/livez` keeps answering 200 throughout: a restart mid-drain would interrupt the
+requests being finished. A second signal skips the rest of the window.
+
+The drain duration bounds both the advertise window and the shutdown deadline,
+so the worst case is twice that duration plus whatever the process needs to
+close its own dependencies. A Kubernetes `terminationGracePeriodSeconds` must be
+larger than that: a 10s drain needs at least 20s plus the dependency teardown.
+Kubernetes removes endpoints asynchronously after SIGTERM, so the window also
+has to be long enough for that removal to propagate. A drain of zero closes the
+server immediately instead.
 
 ### HTTP Utility Functions
 ```go

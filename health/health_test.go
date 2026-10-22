@@ -104,6 +104,38 @@ func TestStartupLatchesOnFirstSuccess(t *testing.T) {
 	}
 }
 
+func TestDrainMakesReadinessUnreadyWithoutConsultingCheck(t *testing.T) {
+	var calls atomic.Int32
+
+	h := mustNew(t, health.Config{
+		Started: health.AlwaysStarted,
+		Ready: func(context.Context) bool {
+			calls.Add(1)
+			return true
+		},
+	})
+
+	probe(t, h.Readiness(), http.StatusOK)
+
+	h.Drain()
+
+	probe(t, h.Readiness(), http.StatusServiceUnavailable)
+	probe(t, h.Readiness(), http.StatusServiceUnavailable)
+
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("ReadyFunc called %d times, want 1 (not called while draining)", got)
+	}
+}
+
+func TestDrainLeavesLivenessAndStartupAlone(t *testing.T) {
+	h := mustNew(t, health.Config{Started: health.AlwaysStarted, Ready: health.AlwaysReady})
+
+	h.Drain()
+
+	probe(t, h.Liveness(), http.StatusOK)
+	probe(t, h.Startup(), http.StatusOK)
+}
+
 func mustNew(t *testing.T, cfg health.Config) *health.Health {
 	t.Helper()
 	h, err := health.New(cfg)
