@@ -1,191 +1,174 @@
+// Package config is a temporary configuration loader.
+//
+// The real configuration system has not been designed yet. This package exists
+// only so callers can read a JSON file over a set of defaults without a
+// process-wide singleton. It will be replaced; do not build new APIs on it.
 package config
 
 import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"log/slog"
+	"io/fs"
 	"os"
-	"strings"
-	"sync"
-	"time"
-
-	"github.com/dfryer1193/mjolnir/utils/log"
+	"reflect"
 )
-
-// defaultLoader is the process-wide configuration singleton. Keeping the
-// loaded state (and its logger) in a value lets tests build isolated loaders
-// and run in parallel.
-//
-//nolint:gochecknoglobals // singleton pattern for loaded config
-var defaultLoader = newLoader(log.GetLogger("config"))
-
-// loader holds one loaded configuration. The package keeps a single default
-// loader; tests construct their own.
-type loader struct {
-	mu       sync.Mutex
-	instance Config
-	loaded   bool
-	logger   *slog.Logger
-}
-
-func newLoader(lg *slog.Logger) *loader {
-	return &loader{logger: lg}
-}
-
-// fatal logs at Error and exits. The logging package is deliberately without
-// a Fatal; a call site that must terminate logs and exits itself.
-func (l *loader) fatal(msg string, err error) {
-	if err != nil {
-		l.logger.Error(msg, slog.Any("error", err))
-	} else {
-		l.logger.Error(msg)
-	}
-	os.Exit(1)
-}
 
 // Config is a map-based configuration structure.
 // It uses map[string]any for maximum flexibility and JSON compatibility.
 type Config map[string]any
 
-const (
-	defaultPort          = 8080
-	defaultHost          = "localhost"
-	defaultReadTimeout   = 30 * time.Second
-	defaultWriteTimeout  = 30 * time.Second
-	defaultLogLevel      = "info"
-	defaultMinConns      = 5
-	defaultMaxConns      = 25
-	defaultMigrationsDir = "./migrations"
-)
-
-//nolint:gochecknoglobals // singleton pattern for defaults
-var defaults = map[string]any{
-	"server": map[string]any{
-		"port":         defaultPort,
-		"host":         defaultHost,
-		"readTimeout":  defaultReadTimeout,
-		"writeTimeout": defaultWriteTimeout,
-	},
-	"log": map[string]any{
-		"level":       defaultLogLevel,
-		"json_output": true,
-	},
-	"db": map[string]any{
-		"pool": map[string]any{
-			"min_conns": defaultMinConns,
-			"max_conns": defaultMaxConns,
-		},
-	},
-	"migrations": map[string]any{
-		"directory": defaultMigrationsDir,
-	},
-}
-
-// Load loads configuration from ./config.json, applies defaults,
-// and returns the configuration singleton.
-func Load() (Config, error) {
-	return defaultLoader.load()
-}
-
-// load reads ./config.json into l exactly once, then returns the result.
-func (l *loader) load() (Config, error) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if l.loaded {
-		return l.instance, nil
+// Load reads the JSON file at path over defaults and returns the merged
+// configuration. It never mutates defaults and every call returns an
+// independent value.
+//
+// A missing file is not an error: Load returns a deep copy of defaults. A file
+// that cannot be read or parsed is an error. Fields absent from the file are
+// filled from defaults; explicit values in the file always win, including
+// scalars, slices, arrays, null, and empty maps.
+func Load(path string, defaults Config) (Config, error) {
+	if _, err := os.Stat(path); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return cloneMap(defaults), nil
+		}
+		return nil, fmt.Errorf("stat config file %q: %w", path, err)
 	}
 
-	l.instance = make(Config)
-	l.loaded = true
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read config file %q: %w", path, err)
+	}
 
-	_, statErr := os.Stat("./config.json")
-	switch {
-	case statErr == nil:
-		file, openErr := os.Open("./config.json")
-		if openErr != nil {
-			l.fatal("failed to open config.json", openErr)
-		}
-		defer file.Close()
+	var user Config
+	if unmarshalErr := json.Unmarshal(data, &user); unmarshalErr != nil {
+		return nil, fmt.Errorf("parse config file %q: %w", path, unmarshalErr)
+	}
 
-		bytes, readErr := io.ReadAll(file)
-		if readErr != nil {
-			l.fatal("failed to read config.json", readErr)
+	return merge(defaults, user), nil
+}
+
+// merge returns defaults with the user values applied. Keys missing from the
+// user config are taken from defaults; non-empty maps are merged recursively;
+// every other user value is kept exactly as written.
+func merge(defaults, user Config) map[string]any {
+	merged := cloneMap(defaults)
+
+	for key, userValue := range user {
+		defaultValue, hasDefault := merged[key]
+		if !hasDefault {
+			merged[key] = userValue
+			continue
 		}
 
-		if unmarshalErr := json.Unmarshal(bytes, &l.instance); unmarshalErr != nil {
-			l.fatal("failed to parse config.json", unmarshalErr)
+		userMap, userIsMap := valueAsMap(userValue)
+		defaultMap, defaultIsMap := valueAsMap(defaultValue)
+
+		// An empty user map is a leaf: the user wrote it, so keep it.
+		if userIsMap && defaultIsMap && len(userMap) > 0 {
+			merged[key] = merge(defaultMap, userMap)
+			continue
 		}
-	case errors.Is(statErr, os.ErrNotExist):
-		l.logger.Warn("config.json not found, using defaults")
+
+		merged[key] = userValue
+	}
+
+	return merged
+}
+
+// valueAsMap returns value as a string-keyed map when it is one.
+func valueAsMap(value any) (map[string]any, bool) {
+	switch typed := value.(type) {
+	case map[string]any:
+		return typed, true
+	case Config:
+		return typed, true
 	default:
-		l.fatal("failed to stat config.json", statErr)
+		return nil, false
 	}
-
-	applyDefaults(l.instance, defaults)
-
-	if validateErr := validateRequired(l.instance); validateErr != nil {
-		l.logger.Error("config validation failed", slog.Any("error", validateErr))
-	}
-
-	return l.instance, nil
 }
 
-// Get returns the singleton configuration instance.
-func Get() Config {
-	return defaultLoader.get()
-}
-
-func (l *loader) get() Config {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if !l.loaded {
-		l.fatal("config has not been loaded yet", nil)
+// cloneMap deep-copies a configuration map so callers cannot share state.
+func cloneMap(source map[string]any) map[string]any {
+	cloned := make(map[string]any, len(source))
+	for key, value := range source {
+		cloned[key] = clone(value)
 	}
-	return l.instance
+	return cloned
 }
 
-// applyDefaults merges defaults into config recursively.
-func applyDefaults(config, defaults Config) {
-	for key, defaultValue := range defaults {
-		if configValue, exists := config[key]; exists {
-			if configMap, matched := configValue.(map[string]any); matched {
-				if defaultMap, innerMatched := defaultValue.(map[string]any); innerMatched {
-					applyDefaults(configMap, defaultMap)
-					continue
-				}
-			}
+// clone deep-copies the container types a configuration tree is built from.
+func clone(value any) any {
+	if value == nil {
+		return nil
+	}
+
+	switch typed := value.(type) {
+	case Config:
+		return cloneMap(typed)
+	case map[string]any:
+		return cloneMap(typed)
+	case []any:
+		cloned := make([]any, len(typed))
+		for i, item := range typed {
+			cloned[i] = clone(item)
 		}
-		config[key] = defaultValue
+		return cloned
+	default:
+		return cloneReflect(reflect.ValueOf(value)).Interface()
 	}
 }
 
-// validateRequired checks for required fields that lack defaults.
-func validateRequired(config Config) error {
-	var errors []string
+// cloneReflect copies maps, slices, and arrays of any type. Other values are
+// immutable for configuration purposes and are returned as-is.
+func cloneReflect(value reflect.Value) reflect.Value {
+	kind := value.Kind()
 
-	for section := range defaults {
-		if _, exists := config[section]; !exists {
-			errors = append(errors, fmt.Sprintf("missing required section: %s", section))
+	if kind == reflect.Interface {
+		if value.IsNil() {
+			return value
 		}
+		cloned := cloneReflect(value.Elem())
+		result := reflect.New(value.Type()).Elem()
+		result.Set(cloned)
+		return result
 	}
 
-	if len(errors) > 0 {
-		return fmt.Errorf("config validation errors: %s", strings.Join(errors, ", "))
+	if kind == reflect.Map {
+		if value.IsNil() {
+			return value
+		}
+		cloned := reflect.MakeMapWithSize(value.Type(), value.Len())
+		iter := value.MapRange()
+		for iter.Next() {
+			cloned.SetMapIndex(iter.Key(), cloneReflect(iter.Value()))
+		}
+		return cloned
 	}
-	return nil
+
+	if kind == reflect.Slice {
+		if value.IsNil() {
+			return value
+		}
+		cloned := reflect.MakeSlice(value.Type(), value.Len(), value.Len())
+		for i := range value.Len() {
+			cloned.Index(i).Set(cloneReflect(value.Index(i)))
+		}
+		return cloned
+	}
+
+	if kind == reflect.Array {
+		cloned := reflect.New(value.Type()).Elem()
+		for i := range value.Len() {
+			cloned.Index(i).Set(cloneReflect(value.Index(i)))
+		}
+		return cloned
+	}
+
+	return value
 }
 
 // String returns a string representation of the configuration for debugging.
 func (c Config) String() string {
 	bytes, _ := json.MarshalIndent(c, "", "  ")
 	return string(bytes)
-}
-
-// SetDirectory sets the config directory (for testing).
-func SetDirectory(dir string) {
-	if dir != "./config.json" {
-		defaultLoader.logger.Warn("config directory override for testing", slog.String("directory", dir))
-	}
 }

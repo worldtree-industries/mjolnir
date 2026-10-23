@@ -16,6 +16,13 @@
 // other exporters. Line-of-code attribution is on by default. The package
 // does not redact fields; callers decide what is safe to log.
 //
+// Sink failures never fail the caller. If the JSON stream cannot be opened or
+// written, logging continues (at least on the text stream) and the failure is
+// reported to the handler installed by SetSinkErrorHandler. With no handler
+// installed, the first failure is warned once on stderr. Applications can use
+// the hook to record a metric or surface the failure; the package itself does
+// not tie logging to readiness.
+//
 // The shared state (the two sink destinations and the per-name level table)
 // lives in a [core]. The package holds one default core; a logger returned by
 // GetLogger is a cheap value handle onto it, so callers obtain one per
@@ -47,13 +54,16 @@ const (
 // hence package-level.
 //
 //nolint:gochecknoglobals // the shared logging state; the only global this package holds, and it is synchronized
-var defaultCore = newCore(os.Stdout, newLazyFile(DefaultJSONPath))
+var defaultCore = newDefaultCore()
 
-// warnOnceMu guards the one-time warning emitted when the JSON file cannot be
-// opened.
-//
-//nolint:gochecknoglobals // one-time warning guard
-var warnOnceMu sync.Once
+// newDefaultCore returns the process-wide core: text on stdout, JSON to
+// DefaultJSONPath (opened lazily, reported through the core's own sink-error
+// reporter).
+func newDefaultCore() *core {
+	c := newCore(os.Stdout, io.Discard)
+	c.json.set(newLazyFile(DefaultJSONPath, c.sinkErrors))
+	return c
+}
 
 // core holds the two sink destinations and the per-name level table. The
 // package keeps one default core; tests construct isolated ones, so the
@@ -63,17 +73,28 @@ type core struct {
 	text *swappableWriter
 	json *swappableWriter
 
+	// sinkErrors receives JSON sink failures for this core. lazyFile holds the
+	// same reporter, so retargeting the handler reaches an already-open sink.
+	sinkErrors *sinkErrorReporter
+
 	mu           sync.RWMutex
 	nameLevels   map[string]slog.Level
 	defaultLevel slog.Level
 }
 
 // newCore returns a core writing text and JSON to the given destinations, with
-// an empty level table at DefaultLevel.
+// an empty level table at DefaultLevel and a default sink-error reporter.
 func newCore(text, json io.Writer) *core {
+	return newCoreWithSinkErrors(text, json, newSinkErrorReporter(nil))
+}
+
+// newCoreWithSinkErrors is newCore with an explicit sink-error reporter, so
+// tests can capture the default warning instead of writing to stderr.
+func newCoreWithSinkErrors(text, json io.Writer, sinkErrors *sinkErrorReporter) *core {
 	return &core{
 		text:         &swappableWriter{w: text},
 		json:         &swappableWriter{w: json},
+		sinkErrors:   sinkErrors,
 		nameLevels:   make(map[string]slog.Level),
 		defaultLevel: DefaultLevel,
 	}
@@ -177,6 +198,26 @@ func (c *core) setJSONFile(path string) error {
 	return nil
 }
 
+// SetSinkErrorHandler installs fn as the process-wide handler for failures of
+// the JSON file sink: the file could not be opened, or a write to it failed.
+// The handler runs on the goroutine that hit the failure, so it should be
+// cheap and must not log through this package (a write that fails and logs
+// could recurse). It is called as errors occur; a slow handler delays those
+// log calls.
+//
+// The handler is a notification, not a failure path: the logging call that
+// triggered it still returns normally, and logging continues on the text
+// stream. Installing nil restores the default, which warns once on stderr and
+// stays quiet afterwards. SetSinkErrorHandler is safe for concurrent use,
+// including while loggers are emitting.
+func SetSinkErrorHandler(fn func(error)) {
+	defaultCore.setSinkErrorHandler(fn)
+}
+
+func (c *core) setSinkErrorHandler(fn func(error)) {
+	c.sinkErrors.setHandler(fn)
+}
+
 // UseOutputForTests redirects both streams to w and returns a func that
 // restores the previous destinations. It is for tests only.
 //
@@ -241,36 +282,90 @@ func (s *swappableWriter) Write(p []byte) (int, error) {
 	return s.w.Write(p)
 }
 
+// sinkErrorReporter records JSON sink failures. With a handler installed it
+// forwards every error; otherwise it writes the first one to out and stays
+// quiet, so a broken sink cannot flood the terminal. A nil out means
+// [os.Stderr], resolved when the warning is written so a redirected stderr is
+// honoured. The mutex makes SetSinkErrorHandler safe while loggers emit.
+type sinkErrorReporter struct {
+	mu      sync.Mutex
+	handler func(error)
+	out     io.Writer
+	warned  bool
+}
+
+func newSinkErrorReporter(out io.Writer) *sinkErrorReporter {
+	return &sinkErrorReporter{out: out}
+}
+
+func (r *sinkErrorReporter) setHandler(fn func(error)) {
+	r.mu.Lock()
+	r.handler = fn
+	r.mu.Unlock()
+}
+
+// report delivers err to the handler, or warns once when there is none. The
+// handler runs without the lock held: it may be slow or change the handler
+// without deadlocking this reporter, though logging from it risks recursion.
+func (r *sinkErrorReporter) report(err error) {
+	r.mu.Lock()
+	handler := r.handler
+	warn := handler == nil && !r.warned
+	if warn {
+		r.warned = true
+	}
+	r.mu.Unlock()
+
+	switch {
+	case handler != nil:
+		handler(err)
+	case warn:
+		out := r.out
+		if out == nil {
+			out = os.Stderr
+		}
+		fmt.Fprintf(out, "mjolnir/log: %v\n", err)
+	}
+}
+
 // lazyFile opens its path (append-only, creating the directory) on first
-// write. If the file cannot be opened it degrades to a discard and warns
-// once, so a missing log location never breaks the application.
+// write. If the file cannot be opened it degrades to a discard and reports
+// the failure, so a missing log location never breaks the application. Write
+// errors are reported as well, and also returned because that write failed.
 type lazyFile struct {
 	path    string
+	errors  *sinkErrorReporter
 	mu      sync.Mutex
 	file    *os.File
 	missing bool
 }
 
-func newLazyFile(path string) *lazyFile {
-	return &lazyFile{path: path}
+func newLazyFile(path string, errors *sinkErrorReporter) *lazyFile {
+	return &lazyFile{path: path, errors: errors}
 }
 
 func (f *lazyFile) Write(p []byte) (int, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	if f.missing {
+		f.mu.Unlock()
 		return len(p), nil
 	}
 	if f.file == nil {
 		file, err := openLogFile(f.path)
 		if err != nil {
 			f.missing = true
-			warnOncef("cannot open %q: %v; JSON stream disabled", f.path, err)
+			f.mu.Unlock()
+			f.errors.report(fmt.Errorf("cannot open %q: %w; JSON stream disabled", f.path, err))
 			return len(p), nil
 		}
 		f.file = file
 	}
-	return f.file.Write(p)
+	n, err := f.file.Write(p)
+	f.mu.Unlock()
+	if err != nil {
+		f.errors.report(fmt.Errorf("write %q: %w", f.path, err))
+	}
+	return n, err
 }
 
 // Close closes the underlying file, if it was opened. A later Write reopens it.
@@ -312,13 +407,4 @@ func closeWriter(w io.Writer) {
 	if c, ok := w.(io.Closer); ok {
 		_ = c.Close()
 	}
-}
-
-// warnOncef writes a one-time warning to stderr. It writes directly (rather
-// than through a logger) so a logging failure here cannot recurse, and to
-// avoid importing the standard log package in this non-main file.
-func warnOncef(format string, args ...any) {
-	warnOnceMu.Do(func() {
-		fmt.Fprintf(os.Stderr, "mjolnir/log: "+format+"\n", args...)
-	})
 }
