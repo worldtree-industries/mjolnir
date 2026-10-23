@@ -2,12 +2,14 @@ package log
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -24,6 +26,23 @@ func newCapturedCore(t *testing.T) (*core, *bytes.Buffer) {
 	var buf bytes.Buffer
 	t.Cleanup(c.useOutputForTests(&buf))
 	return c, &buf
+}
+
+// newFailingSinkCore returns an isolated core whose JSON sink points at a path
+// under a regular file, so opening it fails regardless of the test user's
+// privileges. The reporter writes default warnings to defaultOut. No global
+// state is touched.
+func newFailingSinkCore(t *testing.T, defaultOut io.Writer) (*core, *sinkErrorReporter) {
+	t.Helper()
+	reporter := newSinkErrorReporter(defaultOut)
+	c := newCoreWithSinkErrors(io.Discard, io.Discard, reporter)
+
+	blocker := filepath.Join(t.TempDir(), "blocker")
+	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
+		t.Fatalf("writing blocker file: %v", err)
+	}
+	c.json.set(newLazyFile(filepath.Join(blocker, "sink.jsonl"), reporter))
+	return c, reporter
 }
 
 // The capture seam redirects both sinks, and its restore puts back the
@@ -265,5 +284,179 @@ func TestSetJSONFileErrorLeavesSinkIntact(t *testing.T) {
 	}
 	if !strings.Contains(jsonBuf.String(), "still-works") {
 		t.Fatalf("json sink changed after failed SetJSONFile: %s", jsonBuf.String())
+	}
+}
+
+// A JSON sink that cannot be opened reports to the installed handler, and the
+// logging call still returns normally with the text stream intact.
+func TestSinkOpenFailureInvokesHandler(t *testing.T) {
+	t.Parallel()
+	c, _ := newFailingSinkCore(t, io.Discard)
+	var text bytes.Buffer
+	c.text.set(&text)
+
+	got := make(chan error, 1)
+	c.setSinkErrorHandler(func(err error) { got <- err })
+
+	c.logger("FailingSink").Info("still-logged")
+
+	if !strings.Contains(text.String(), "still-logged") {
+		t.Fatalf("text stream did not receive the record: %q", text.String())
+	}
+	select {
+	case err := <-got:
+		if !strings.Contains(err.Error(), "sink.jsonl") {
+			t.Fatalf("handler error does not name the sink: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("sink error handler was not invoked")
+	}
+}
+
+// With no handler installed, the default path warns once and then stays quiet.
+func TestSinkOpenFailureDefaultWarnsOnce(t *testing.T) {
+	t.Parallel()
+	var warnings bytes.Buffer
+	c, _ := newFailingSinkCore(t, &warnings)
+
+	lg := c.logger("DefaultWarn")
+	lg.Info("first")
+	lg.Info("second")
+
+	if got := strings.Count(warnings.String(), "JSON stream disabled"); got != 1 {
+		t.Fatalf("expected exactly one default warning, got %d: %q", got, warnings.String())
+	}
+	if !strings.Contains(warnings.String(), "sink.jsonl") {
+		t.Fatalf("warning does not name the sink: %q", warnings.String())
+	}
+}
+
+// Installing a handler suppresses the default warning; setting nil restores it.
+func TestSinkErrorHandlerNilRestoresDefault(t *testing.T) {
+	t.Parallel()
+	var warnings bytes.Buffer
+	c, _ := newFailingSinkCore(t, &warnings)
+
+	calls := 0
+	c.setSinkErrorHandler(func(error) { calls++ })
+	c.logger("HandlerSet").Info("handled")
+
+	if calls != 1 {
+		t.Fatalf("handler calls = %d, want 1", calls)
+	}
+	if warnings.Len() != 0 {
+		t.Fatalf("default warning emitted while handler installed: %q", warnings.String())
+	}
+
+	c2, _ := newFailingSinkCore(t, &warnings)
+	c2.setSinkErrorHandler(nil)
+	c2.logger("HandlerNil").Info("default-warned")
+
+	if !strings.Contains(warnings.String(), "JSON stream disabled") {
+		t.Fatalf("nil did not restore the default warning: %q", warnings.String())
+	}
+}
+
+// Write failures after a successful open reach the handler too.
+func TestSinkWriteFailureInvokesHandler(t *testing.T) {
+	t.Parallel()
+	reporter := newSinkErrorReporter(io.Discard)
+
+	path := filepath.Join(t.TempDir(), "closed.jsonl")
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatalf("opening file: %v", err)
+	}
+	if closeErr := f.Close(); closeErr != nil {
+		t.Fatalf("closing file: %v", closeErr)
+	}
+
+	lf := newLazyFile(path, reporter)
+	lf.file = f // deliberately closed: the write must fail
+	var got error
+	reporter.setHandler(func(err error) { got = err })
+
+	if _, writeErr := lf.Write([]byte("x")); writeErr == nil {
+		t.Fatal("expected a write error")
+	}
+	if got == nil || !strings.Contains(got.Error(), "write") {
+		t.Fatalf("handler did not receive the write failure: %v", got)
+	}
+}
+
+// A SetJSONFile destination reports write failures too: slog discards writer
+// errors, so the wrapper must forward them to the sink-error handler.
+func TestReportedWriterReportsWriteFailure(t *testing.T) {
+	t.Parallel()
+	reporter := newSinkErrorReporter(io.Discard)
+
+	path := filepath.Join(t.TempDir(), "closed.jsonl")
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatalf("opening file: %v", err)
+	}
+	if closeErr := f.Close(); closeErr != nil {
+		t.Fatalf("closing file: %v", closeErr)
+	}
+
+	var got error
+	reporter.setHandler(func(err error) { got = err })
+
+	rw := &reportedWriter{w: f, errors: reporter, path: path}
+	if _, writeErr := rw.Write([]byte("x")); writeErr == nil {
+		t.Fatal("expected a write error")
+	}
+	if got == nil || !strings.Contains(got.Error(), "closed.jsonl") {
+		t.Fatalf("handler did not receive the write failure: %v", got)
+	}
+}
+
+// Handler installation, invocation, and logging are race-free when they run
+// together. Run with -race; the race detector is the assertion. The handler is
+// never nil here, so at least one invocation is guaranteed.
+func TestSinkErrorHandlerConcurrentWithLogging(t *testing.T) {
+	t.Parallel()
+	c, reporter := newFailingSinkCore(t, io.Discard)
+
+	var calls atomic.Int64
+	first := func(error) { calls.Add(1) }
+	second := func(error) { calls.Add(1) }
+	c.setSinkErrorHandler(first)
+
+	const workers = 8
+	var wg sync.WaitGroup
+	stop := make(chan struct{})
+	for range workers {
+		wg.Go(func() {
+			lg := c.logger("ConcurrentSink")
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				lg.Info("tick")
+			}
+		})
+	}
+	wg.Go(func() {
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			c.setSinkErrorHandler(first)
+			c.setSinkErrorHandler(second)
+			reporter.report(errors.New("forced sink failure"))
+		}
+	})
+
+	time.Sleep(100 * time.Millisecond)
+	close(stop)
+	wg.Wait()
+
+	if calls.Load() == 0 {
+		t.Fatal("sink error handler was never invoked under concurrency")
 	}
 }
