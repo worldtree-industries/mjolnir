@@ -175,6 +175,19 @@ Rules enforced by the package:
 
 Helpers: `BadRequest`, `Unauthorized`, `Forbidden`, `NotFound`, `Conflict`, `UnprocessableEntity`, `Internal`, and `ServiceUnavailable`.
 
+### Migrating from `errorx`
+
+`utils/errorx` is removed. The shapes map directly:
+
+- `errorx.ErrorHandler(fn)` → `httpx.Handler(fn)`
+- `*errorx.APIError` → `*httpx.Problem`
+- `errorx.BadRequestErr(err)` → `httpx.BadRequest("bad_request", "public detail")`
+- `errorx.InternalServerErr(err)` → `httpx.Internal(err)`
+- `errorx.NewAPIError(err, status)` → `httpx.NewProblem(status, "code", "public detail", err)`
+
+`router.New` now takes `router.Config`; wrap the old health config as
+`router.New(router.Config{Health: health.Config{...}})`.
+
 ### Server timeouts
 
 `router.NewServer` provides a baseline:
