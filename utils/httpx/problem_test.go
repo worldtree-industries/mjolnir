@@ -173,8 +173,7 @@ func TestHandlerDoesNotConcatenateAfterWrite(t *testing.T) {
 	)
 
 	rr := httptest.NewRecorder()
-	rw := middleware.NewResponseWriter(rr, 1)
-	inner.ServeHTTP(rw, httptest.NewRequest(http.MethodGet, "/", nil))
+	inner.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/", nil))
 
 	if rr.Body.String() != "ok" {
 		t.Errorf("body = %q, want %q", rr.Body.String(), "ok")

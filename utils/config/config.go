@@ -101,21 +101,7 @@ func clone(value any) any {
 	if value == nil {
 		return nil
 	}
-
-	switch typed := value.(type) {
-	case Config:
-		return cloneMap(typed)
-	case map[string]any:
-		return cloneMap(typed)
-	case []any:
-		cloned := make([]any, len(typed))
-		for i, item := range typed {
-			cloned[i] = clone(item)
-		}
-		return cloned
-	default:
-		return cloneReflect(reflect.ValueOf(value)).Interface()
-	}
+	return cloneReflect(reflect.ValueOf(value)).Interface()
 }
 
 // cloneReflect copies maps, slices, and arrays of any type. Other values are

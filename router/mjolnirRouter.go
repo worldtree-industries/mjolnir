@@ -73,7 +73,7 @@ func New(cfg Config) (*Router, error) {
 
 	r := chi.NewRouter()
 
-	ipMiddleware, err := clientIP(cfg.TrustedProxies)
+	ipMiddleware, err := clientIPMiddleware(cfg.TrustedProxies)
 	if err != nil {
 		return nil, err
 	}
@@ -93,7 +93,7 @@ func New(cfg Config) (*Router, error) {
 	return &Router{Mux: r, health: h}, nil
 }
 
-func clientIP(prefixes []netip.Prefix) (func(http.Handler) http.Handler, error) {
+func clientIPMiddleware(prefixes []netip.Prefix) (func(http.Handler) http.Handler, error) {
 	if len(prefixes) == 0 {
 		return chimiddleware.ClientIPFromRemoteAddr, nil
 	}

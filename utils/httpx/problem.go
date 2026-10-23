@@ -105,6 +105,8 @@ func (p *Problem) validate() error {
 
 // WriteProblem writes p as application/problem+json. It returns
 // ErrResponseStarted without writing when the response has already begun.
+// Detection requires a status-aware writer; [Handler] installs one, and the
+// router's access logger already does.
 //
 // Instance defaults to urn:uuid:<request-id> when the request carries an id.
 func WriteProblem(w http.ResponseWriter, r *http.Request, p *Problem) error {
@@ -157,7 +159,11 @@ func HandlerWithLogger(fn func(http.ResponseWriter, *http.Request) *Problem, lg 
 		lg = log.GetLogger("http")
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
-		p := fn(w, r)
+		// The handler must receive a status-aware writer so a late problem can
+		// detect that a response already started. Reuse an existing wrapper
+		// (the router installs one) instead of stacking another.
+		ww := observableWriter(w, r)
+		p := fn(ww, r)
 		if p == nil {
 			return
 		}
@@ -175,7 +181,7 @@ func HandlerWithLogger(fn func(http.ResponseWriter, *http.Request) *Problem, lg 
 			logProblem(lg, r, p)
 		}
 
-		if err := WriteProblem(w, r, p); err != nil {
+		if err := WriteProblem(ww, r, p); err != nil {
 			if errors.Is(err, ErrResponseStarted) {
 				lg.WarnContext(r.Context(), "problem not written: response already started",
 					slog.String("method", r.Method),
@@ -210,6 +216,16 @@ func logProblem(lg *slog.Logger, r *http.Request, p *Problem) {
 func responseStarted(w http.ResponseWriter) bool {
 	rw, ok := w.(interface{ Status() int })
 	return ok && rw.Status() != 0
+}
+
+// observableWriter ensures a handler has a status-aware writer. Existing
+// wrappers are reused so the router's access logger and the problem handler
+// observe the same response.
+func observableWriter(w http.ResponseWriter, r *http.Request) http.ResponseWriter {
+	if _, ok := w.(interface{ Status() int }); ok {
+		return w
+	}
+	return middleware.NewResponseWriter(w, r.ProtoMajor)
 }
 
 func mustProblem(status int, code, detail string, cause error) *Problem {

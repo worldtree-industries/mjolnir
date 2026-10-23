@@ -28,6 +28,11 @@ func TestConfigWithDefaults(t *testing.T) {
 			want: Config{MinConns: defaults.MinConns, MaxConns: 10, ConnTimeout: defaults.ConnTimeout},
 		},
 		{
+			name: "max below default min",
+			in:   Config{MaxConns: 1},
+			want: Config{MinConns: 1, MaxConns: 1, ConnTimeout: defaults.ConnTimeout},
+		},
+		{
 			name: "min only",
 			in:   Config{MinConns: 2},
 			want: Config{MinConns: 2, MaxConns: defaults.MaxConns, ConnTimeout: defaults.ConnTimeout},
@@ -86,9 +91,8 @@ func TestConfigValidate(t *testing.T) {
 			wantErr: "min conns (10) must not exceed max conns (5)",
 		},
 		{
-			name:    "max below default min",
-			cfg:     Config{MaxConns: 1},
-			wantErr: "min conns (5) must not exceed max conns (1)",
+			name: "max below default min",
+			cfg:  Config{MaxConns: 1},
 		},
 		{
 			name:    "negative min",

@@ -41,27 +41,24 @@ func Do(ctx context.Context, cfg Config, fn func(context.Context) error) error {
 	cfg = withDefaults(cfg)
 
 	delay := cfg.InitialDelay
-	var lastErr error
 
-	for attempt := 1; attempt <= cfg.MaxAttempts; attempt++ {
+	for attempt := 1; ; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 
-		lastErr = fn(ctx)
-		if lastErr == nil {
+		err := fn(ctx)
+		if err == nil {
 			return nil
 		}
-		if !cfg.shouldRetry(lastErr) || attempt == cfg.MaxAttempts {
-			return lastErr
-		}
-		if err := wait(ctx, delay); err != nil {
+		if !cfg.shouldRetry(err) || attempt >= cfg.MaxAttempts {
 			return err
+		}
+		if waitErr := wait(ctx, delay); waitErr != nil {
+			return waitErr
 		}
 		delay = nextDelay(delay, cfg.MaxDelay)
 	}
-
-	return lastErr
 }
 
 // withDefaults fills each zero or negative field from DefaultConfig and

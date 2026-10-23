@@ -54,9 +54,10 @@ A component that formats and delivers log events to a destination. The framework
 ## Design Decisions
 
 - **Foundation**: `log/slog`, stdlib — ADR-0003 (supersedes ADR-0001)
-- **No global logger**: `GetLogger(name)` hands out ready-to-use loggers; the package owns a name→level table and the sink writers, and nothing else — ADR-0004
+- **No global logger**: `GetLogger(name)` hands out ready-to-use loggers; the package owns a name→level table, the sink writers, and the sink-error reporter — ADR-0004
 - **Per-name levels, on the fly**: `SetLevel(name, lvl)` takes effect on the next emitted event for every logger of that name; level is a minimum threshold, default Info
 - **Output**: text → stdout, JSON → file (default `logs/mjolnir.jsonl`, append-only); attribution on by default via `AddSource`
+- **Sink failures are visible, not fatal**: `SetSinkErrorHandler` receives JSON open/write failures; with no handler the first failure warns once on stderr, and the request path never fails because of it
 - **No automatic redaction**: the package does not inspect or mask fields; callers decide what is safe to log
 - **Correlation is the caller's job**: the logging package is correlation-agnostic; the HTTP layer (`middleware`) owns the request id (context key + `GetRequestID`) and attaches it to request log lines via `*slog.Logger.With`
 - **Client IP is default-deny**: forwarding headers are ignored unless the peer is inside a configured `TrustedProxies` prefix — ADR-0008

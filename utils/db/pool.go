@@ -39,11 +39,15 @@ func DefaultConfig() Config {
 // values untouched.
 func (c Config) withDefaults() Config {
 	defaults := DefaultConfig()
-	if c.MinConns == 0 {
-		c.MinConns = defaults.MinConns
-	}
 	if c.MaxConns == 0 {
 		c.MaxConns = defaults.MaxConns
+	}
+	if c.MinConns == 0 {
+		c.MinConns = defaults.MinConns
+		// An explicit maximum below the default minimum must still be usable.
+		if c.MaxConns > 0 && c.MinConns > c.MaxConns {
+			c.MinConns = c.MaxConns
+		}
 	}
 	if c.ConnTimeout == 0 {
 		c.ConnTimeout = defaults.ConnTimeout

@@ -1,11 +1,18 @@
 # Mjolnir HTTP kit: consumer-facing sharp edges
 
+> **Historical snapshot — pre-fix.** The findings below describe `origin/main` before the
+> adoption-hardening work in [#29](https://github.com/worldtree-industries/mjolnir/issues/29).
+> They are kept as the evidence that drove the changes, not as a description of the current
+> API. The resolution table at the end maps each finding to its regression test; read that
+> first.
+
 **Scope.** What a service adopts when it depends on this module: request correlation, client
 address, streaming, body limits, timeouts, error bodies, probes, logging, panics, and the
 module/toolchain contract. **Method.** Primary sources (RFCs, IANA, Go docs/source, Kubernetes
 docs, chi source/advisories, CWE/OWASP/AIP) plus a probe against Mjolnir's public API; probe
 results are labelled *local probe*. Anything not verified is called out. **Versions checked:**
-`go.mod` at `go 1.27.0`, chi `v5.2.1`, pgx `v5.11.0`; local toolchain `go1.27.1`.
+`go.mod` at `go 1.27.0`, chi `v5.2.1` at the time of review (the branch under test uses
+`v5.5.0`), pgx `v5.11.0`; local toolchain `go1.27.1`.
 
 ## 1. Request correlation: `X-Request-ID` is not a standard, and it is trusted verbatim
 
@@ -78,8 +85,10 @@ results are labelled *local probe*. Anything not verified is called out. **Versi
 
 ## Resolution (2026-10-23)
 
-The probe was promoted into regression tests and then deleted. This table maps each finding to
-the code and test that now covers it; the work is specified in [#29](https://github.com/worldtree-industries/mjolnir/issues/29).
+The probe was an untracked local program, so its removal is not visible in git history; its
+findings were promoted into the tests below and the program was deleted from the worktree. This
+table maps each finding to the code and test that now covers it; the work is specified in
+[#29](https://github.com/worldtree-industries/mjolnir/issues/29).
 
 | # | Resolution | Evidence |
 | --- | --- | --- |

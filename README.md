@@ -188,6 +188,10 @@ Helpers: `BadRequest`, `Unauthorized`, `Forbidden`, `NotFound`, `Conflict`, `Unp
 `router.New` now takes `router.Config`; wrap the old health config as
 `router.New(router.Config{Health: health.Config{...}})`.
 
+`retry.Do` now takes a context and a `Config` with a `ShouldRetry` predicate:
+`retry.Do(ctx, cfg, fn)` with `fn func(context.Context) error`. `RetryTypes` is
+removed; express the same policy through `ShouldRetry`.
+
 ### Server timeouts
 
 `router.NewServer` provides a baseline:
