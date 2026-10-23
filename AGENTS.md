@@ -27,6 +27,10 @@ stale the moment another change lands: `git diff main` compares against an old r
 not the trunk. Base work on `origin/main`, and read `fatal: 'main' is already used by
 worktree` after a merge as harmless — the local branch deletion failed, nothing else did.
 
+## Branches
+
+Branch names never contain slashes. Use hyphens: `add-health-checks`, not `feature/add-health-checks` or `fix/xyz`. A slash reads as a hierarchy, and nothing here needs one.
+
 ## Commits
 
 Commit messages are plain prose (e.g. `Redesign Option[T] around explicit presence`); no type or scope prefixes — not `feat:`, `fix:`, `chore:`, or `optional:`.
