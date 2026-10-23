@@ -19,7 +19,7 @@ The framework reassigned zerolog's package-global `log.Logger` (in `router.New`)
 - **No package-level `Fatal`**: slog has none. Call sites that must terminate log at `Error` and call `os.Exit` themselves.
 - **Test seam**: `UseOutputForTests(io.Writer)` redirects both sinks and returns a `restore` function; documented as for tests only.
 
-The package's total state is the level table and the two sink writers. Neither is a logger.
+The package's total state is the level table, the two sink writers, and the sink-error reporter (including the handler installed by `SetSinkErrorHandler`). None is a logger.
 
 ## Considered Options
 
@@ -34,4 +34,4 @@ The package's total state is the level table and the two sink writers. Neither i
 - Level changes are visible from the next emitted event, for every holder of the name; no re-acquisition or re-derivation required.
 - `SetLevel` on a name that no `GetLogger` call has made yet creates the row immediately; a later `GetLogger` for that name binds to it (the row-binding rule above).
 - The table is bounded by the number of distinct component names ever passed. Names are component identifiers — a small, stable set — not request-scoped strings.
-- `config`'s `log.level` is not yet applied: `config.Load()` itself logs while loading (chicken-and-egg), and config has no reload mechanism. Follow-up: call `SetDefaultLevel` with the parsed value after `Load()`.
+- `config`'s `log.level` is not applied: `utils/config` is a temporary generic loader with no logger and no reload mechanism. The follow-up belongs to the replacement configuration system: call `SetDefaultLevel` with the parsed value after loading.
