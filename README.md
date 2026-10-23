@@ -170,7 +170,7 @@ Rules enforced by the package:
 - 4xx: `detail` is the explicit public message. The wrapped cause is never written to the response.
 - 5xx: the caller's status and code are preserved (a 503 stays 503); `detail` is replaced with the status text and the cause is logged at Error with method, path, and request ID.
 - `NewProblem` rejects a status outside 4xx/5xx, an empty code, and a 5xx without a cause.
-- A problem returned after the response started is not written; `WriteProblem` returns `httpx.ErrResponseStarted`.
+- A problem returned after the response started is not written; `WriteProblem` returns `httpx.ErrResponseStarted` when its writer is status-aware (`httpx.Handler` installs one).
 - A panic before any write becomes a 500 problem. A panic after a write is logged with a stack and the connection is aborted, so the client does not receive a second body or a clean truncated 200.
 
 Helpers: `BadRequest`, `Unauthorized`, `Forbidden`, `NotFound`, `Conflict`, `UnprocessableEntity`, `Internal`, and `ServiceUnavailable`.

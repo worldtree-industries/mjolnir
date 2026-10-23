@@ -113,7 +113,7 @@ func WriteProblem(w http.ResponseWriter, r *http.Request, p *Problem) error {
 	if err := p.validate(); err != nil {
 		return err
 	}
-	if responseStarted(w) {
+	if middleware.ResponseStarted(w) {
 		return ErrResponseStarted
 	}
 
@@ -211,11 +211,6 @@ func logProblem(lg *slog.Logger, r *http.Request, p *Problem) {
 		attrs = append(attrs, slog.String("request_id", id))
 	}
 	lg.ErrorContext(r.Context(), "request failed", attrs...)
-}
-
-func responseStarted(w http.ResponseWriter) bool {
-	rw, ok := w.(interface{ Status() int })
-	return ok && rw.Status() != 0
 }
 
 // observableWriter ensures a handler has a status-aware writer. Existing

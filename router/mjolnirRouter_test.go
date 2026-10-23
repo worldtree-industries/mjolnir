@@ -254,6 +254,22 @@ func TestClientIPFailsClosedOnUnparsablePeer(t *testing.T) {
 	}
 }
 
+func TestClientIPFailsClosedOnUnparsablePeerWithTrustedProxies(t *testing.T) {
+	r := mustNewConfig(t, router.Config{
+		Health:         health.Config{Started: health.AlwaysStarted, Ready: health.AlwaysReady},
+		TrustedProxies: []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")},
+	})
+	r.Get("/who", whoHandler)
+
+	req := httptest.NewRequest(http.MethodGet, "/who", nil)
+	req.RemoteAddr = "not-an-ip"
+	req.Header.Set("X-Forwarded-For", "203.0.113.9")
+
+	if got := serveWho(t, r, req); got != "" {
+		t.Fatalf("client IP = %q, want empty (fail closed)", got)
+	}
+}
+
 func whoHandler(w http.ResponseWriter, r *http.Request) {
 	_, _ = io.WriteString(w, chimiddleware.GetClientIP(r.Context()))
 }

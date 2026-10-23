@@ -61,7 +61,7 @@ A component that formats and delivers log events to a destination. The framework
 - **No automatic redaction**: the package does not inspect or mask fields; callers decide what is safe to log
 - **Correlation is the caller's job**: the logging package is correlation-agnostic; the HTTP layer (`middleware`) owns the request id (context key + `GetRequestID`) and attaches it to request log lines via `*slog.Logger.With`
 - **Client IP is default-deny**: forwarding headers are ignored unless the peer is inside a configured `TrustedProxies` prefix — ADR-0008
-- **HTTP errors are RFC 9457 problems**: `utils/httpx` owns `Problem`, `Codec`, and `Handler`; `utils/errorx` is gone — ADR-0007
+- **HTTP errors are RFC 9457 problems**: `utils/httpx` owns `Problem`, `Codec`, and `Handler`; `utils/errorx` is gone — #29
 - **One total drain budget**: readiness window and shutdown grace split the configured value, so shutdown is not worst-case 2× — ADR-0005
 - **Config is temporary**: `utils/config` is a generic JSON loader with no singleton; it will be replaced, so do not build a typed schema into it
 - **No package-level Fatal**: callers that must terminate log at Error and exit themselves

@@ -384,6 +384,33 @@ func TestSinkWriteFailureInvokesHandler(t *testing.T) {
 	}
 }
 
+// A SetJSONFile destination reports write failures too: slog discards writer
+// errors, so the wrapper must forward them to the sink-error handler.
+func TestReportedWriterReportsWriteFailure(t *testing.T) {
+	t.Parallel()
+	reporter := newSinkErrorReporter(io.Discard)
+
+	path := filepath.Join(t.TempDir(), "closed.jsonl")
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatalf("opening file: %v", err)
+	}
+	if closeErr := f.Close(); closeErr != nil {
+		t.Fatalf("closing file: %v", closeErr)
+	}
+
+	var got error
+	reporter.setHandler(func(err error) { got = err })
+
+	rw := &reportedWriter{w: f, errors: reporter, path: path}
+	if _, writeErr := rw.Write([]byte("x")); writeErr == nil {
+		t.Fatal("expected a write error")
+	}
+	if got == nil || !strings.Contains(got.Error(), "closed.jsonl") {
+		t.Fatalf("handler did not receive the write failure: %v", got)
+	}
+}
+
 // Handler installation, invocation, and logging are race-free when they run
 // together. Run with -race; the race detector is the assertion. The handler is
 // never nil here, so at least one invocation is guaranteed.

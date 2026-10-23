@@ -7,11 +7,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// maxRequestIDLength is the longest form [uuid.Parse] accepts (the URN form:
-// "urn:uuid:" plus 36 characters). Checking it first avoids scanning a
-// multi-kilobyte header before rejecting it.
-const maxRequestIDLength = 45
-
 // RequestID sets a canonical UUID request id on the context and response.
 //
 // A client-supplied X-Request-ID is accepted only when it parses as a UUID and
@@ -29,9 +24,6 @@ func RequestID(next http.Handler) http.Handler {
 }
 
 func requestID(inbound string) string {
-	if len(inbound) > maxRequestIDLength {
-		return generateRequestID()
-	}
 	parsed, err := uuid.Parse(inbound)
 	if err != nil {
 		return generateRequestID()

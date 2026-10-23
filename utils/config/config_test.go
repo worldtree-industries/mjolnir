@@ -144,7 +144,7 @@ func TestLoadNullIsKept(t *testing.T) {
 	assertConfig(t, got, Config{"log": nil})
 }
 
-func TestLoadEmptyMapIsKept(t *testing.T) {
+func TestLoadEmptyMapIsFilled(t *testing.T) {
 	t.Parallel()
 
 	defaults := Config{
@@ -154,7 +154,9 @@ func TestLoadEmptyMapIsKept(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	assertConfig(t, got, Config{"db": map[string]any{}})
+	assertConfig(t, got, Config{
+		"db": map[string]any{"pool": map[string]any{"min_conns": 5}},
+	})
 }
 
 func TestLoadInvalidJSON(t *testing.T) {

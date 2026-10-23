@@ -23,9 +23,10 @@ log, and is indistinguishable from a genuinely assigned ID.
 
 - **Upgrade chi to the current v5 line** (v5.5.0 at the time of writing) and stop using
   the deprecated `RealIP`.
-- **No forwarding header is trusted by default.** The router installs no client-IP
+- **No forwarding header is trusted by default.** The router installs no forwarding-header
   middleware unless the application configures trusted proxies; `RemoteAddr` stays the
-  transport peer.
+  transport peer and is always recorded. Without trusted proxies, the resolved client IP is
+  the transport peer.
 - **Trust is opt-in and explicit.** When configured, use chi's client-IP middleware over
   a declared list of trusted CIDR prefixes (not a hop count), and read the address with
   `GetClientIP(ctx)`; never mutate `RemoteAddr`. The access log records the resolved

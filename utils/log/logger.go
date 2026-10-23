@@ -23,11 +23,12 @@
 // the hook to record a metric or surface the failure; the package itself does
 // not tie logging to readiness.
 //
-// The shared state (the two sink destinations and the per-name level table)
-// lives in a [core]. The package holds one default core; a logger returned by
-// GetLogger is a cheap value handle onto it, so callers obtain one per
-// function rather than caching it at package scope. Tests build isolated
-// cores, which is what lets them exercise the machinery in parallel.
+// The shared state (the two sink destinations, the sink-error reporter, and
+// the per-name level table) lives in a [core]. The package holds one default
+// core; a logger returned by GetLogger is a cheap value handle onto it, so
+// callers obtain one per function rather than caching it at package scope.
+// Tests build isolated cores, which is what lets them exercise the machinery
+// in parallel.
 package log
 
 import (
@@ -50,8 +51,8 @@ const (
 )
 
 // defaultCore is the process-wide state every GetLogger handle points at: the
-// two sink destinations and the per-name level table. It must be process-wide,
-// hence package-level.
+// two sink destinations, the sink-error reporter, and the per-name level
+// table. It must be process-wide, hence package-level.
 //
 //nolint:gochecknoglobals // the shared logging state; the only global this package holds, and it is synchronized
 var defaultCore = newDefaultCore()
@@ -65,10 +66,10 @@ func newDefaultCore() *core {
 	return c
 }
 
-// core holds the two sink destinations and the per-name level table. The
-// package keeps one default core; tests construct isolated ones, so the
-// stateful machinery can be exercised in parallel without touching
-// process-wide state.
+// core holds the two sink destinations, the sink-error reporter, and the
+// per-name level table. The package keeps one default core; tests construct
+// isolated ones, so the stateful machinery can be exercised in parallel
+// without touching process-wide state.
 type core struct {
 	text *swappableWriter
 	json *swappableWriter
@@ -194,7 +195,7 @@ func (c *core) setJSONFile(path string) error {
 	if err != nil {
 		return err
 	}
-	closeWriter(c.json.swap(f))
+	closeWriter(c.json.swap(&reportedWriter{w: f, errors: c.sinkErrors, path: path}))
 	return nil
 }
 
@@ -328,6 +329,27 @@ func (r *sinkErrorReporter) report(err error) {
 	}
 }
 
+// reportedWriter reports write failures from an already-open JSON sink. The
+// standard slog handler discards writer errors, so this wrapper is what makes
+// SetJSONFile write failures visible through SetSinkErrorHandler.
+type reportedWriter struct {
+	w      io.Writer
+	errors *sinkErrorReporter
+	path   string
+}
+
+func (w *reportedWriter) Write(p []byte) (int, error) {
+	n, err := w.w.Write(p)
+	if err != nil {
+		w.errors.report(fmt.Errorf("write %q: %w", w.path, err))
+	}
+	return n, err
+}
+
+func (w *reportedWriter) Close() error {
+	return closeWriterErr(w.w)
+}
+
 // lazyFile opens its path (append-only, creating the directory) on first
 // write. If the file cannot be opened it degrades to a discard and reports
 // the failure, so a missing log location never breaks the application. Write
@@ -398,13 +420,18 @@ func openLogFile(path string) (*os.File, error) {
 // closeWriter releases the resource held by w, if it owns one. Buffers and
 // [io.Discard] are left alone, and the standard streams are never closed.
 func closeWriter(w io.Writer) {
+	_ = closeWriterErr(w)
+}
+
+func closeWriterErr(w io.Writer) error {
 	if f, ok := w.(*os.File); ok {
-		if f != os.Stdout && f != os.Stderr {
-			_ = f.Close()
+		if f == os.Stdout || f == os.Stderr {
+			return nil
 		}
-		return
+		return f.Close()
 	}
 	if c, ok := w.(io.Closer); ok {
-		_ = c.Close()
+		return c.Close()
 	}
+	return nil
 }

@@ -25,7 +25,8 @@ type Config map[string]any
 // A missing file is not an error: Load returns a deep copy of defaults. A file
 // that cannot be read or parsed is an error. Fields absent from the file are
 // filled from defaults; explicit values in the file always win, including
-// scalars, slices, arrays, null, and empty maps.
+// scalars, slices, arrays, and null. Maps are merged recursively, including an
+// empty map, which supplies no leaves of its own.
 func Load(path string, defaults Config) (Config, error) {
 	if _, err := os.Stat(path); err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
@@ -48,8 +49,8 @@ func Load(path string, defaults Config) (Config, error) {
 }
 
 // merge returns defaults with the user values applied. Keys missing from the
-// user config are taken from defaults; non-empty maps are merged recursively;
-// every other user value is kept exactly as written.
+// user config are taken from defaults; maps are merged recursively; every other
+// user value is kept exactly as written.
 func merge(defaults, user Config) map[string]any {
 	merged := cloneMap(defaults)
 
@@ -63,8 +64,7 @@ func merge(defaults, user Config) map[string]any {
 		userMap, userIsMap := valueAsMap(userValue)
 		defaultMap, defaultIsMap := valueAsMap(defaultValue)
 
-		// An empty user map is a leaf: the user wrote it, so keep it.
-		if userIsMap && defaultIsMap && len(userMap) > 0 {
+		if userIsMap && defaultIsMap {
 			merged[key] = merge(defaultMap, userMap)
 			continue
 		}

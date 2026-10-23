@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
-	"regexp"
 	"strings"
 	"time"
 
@@ -176,8 +175,88 @@ func maskURLDSN(dsn string) string {
 }
 
 // maskKeywordDSN masks a password in keyword/value DSNs such as
-// "host=db password=secret". Quoted passwords may contain spaces.
+// "host=db password=secret". Quoted passwords may contain spaces, and both
+// quoted and unquoted values may use backslash escapes.
 func maskKeywordDSN(dsn string) string {
-	password := regexp.MustCompile(`(?i)(\bpassword\s*=\s*)('[^']*'|"[^"]*"|\S+)`)
-	return password.ReplaceAllString(dsn, "${1}"+maskedPassword)
+	var out strings.Builder
+
+	for i := 0; i < len(dsn); {
+		if i > 0 && !isDSNSpace(dsn[i-1]) {
+			out.WriteByte(dsn[i])
+			i++
+			continue
+		}
+
+		keyStart := i
+		i = scanDSNKey(dsn, i)
+		key := dsn[keyStart:i]
+
+		equals := skipDSNSpace(dsn, i)
+		if equals >= len(dsn) || dsn[equals] != '=' {
+			out.WriteString(dsn[keyStart:equals])
+			i = equals
+			continue
+		}
+
+		valueStart := skipDSNSpace(dsn, equals+1)
+		out.WriteString(dsn[keyStart:valueStart])
+
+		i = scanDSNValue(dsn, valueStart)
+		if strings.EqualFold(key, "password") {
+			out.WriteString(maskedPassword)
+		} else {
+			out.WriteString(dsn[valueStart:i])
+		}
+	}
+
+	return out.String()
+}
+
+func scanDSNKey(dsn string, i int) int {
+	for i < len(dsn) && dsn[i] != '=' && !isDSNSpace(dsn[i]) {
+		i++
+	}
+	return i
+}
+
+func skipDSNSpace(dsn string, i int) int {
+	for i < len(dsn) && isDSNSpace(dsn[i]) {
+		i++
+	}
+	return i
+}
+
+func scanDSNValue(dsn string, i int) int {
+	if i >= len(dsn) {
+		return i
+	}
+
+	if dsn[i] == '\'' || dsn[i] == '"' {
+		quote := dsn[i]
+		i++
+		for i < len(dsn) {
+			if dsn[i] == '\\' && i+1 < len(dsn) {
+				i += 2
+				continue
+			}
+			if dsn[i] == quote {
+				return i + 1
+			}
+			i++
+		}
+		return i
+	}
+
+	for i < len(dsn) && !isDSNSpace(dsn[i]) {
+		if dsn[i] == '\\' && i+1 < len(dsn) {
+			i += 2
+			continue
+		}
+		i++
+	}
+	return i
+}
+
+func isDSNSpace(c byte) bool {
+	return c == ' ' || c == '\t' || c == '\n' || c == '\r'
 }

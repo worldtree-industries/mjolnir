@@ -190,6 +190,16 @@ func TestMaskDSN(t *testing.T) {
 			want: "host=db password=REDACTED dbname=app",
 		},
 		{
+			name: "quoted keyword password with escaped quote",
+			dsn:  `host=db password='s3\'cret' dbname=app`,
+			want: "host=db password=REDACTED dbname=app",
+		},
+		{
+			name: "unquoted keyword password with escaped space",
+			dsn:  `host=db password=s3\ cret dbname=app`,
+			want: "host=db password=REDACTED dbname=app",
+		},
+		{
 			name: "url without password",
 			dsn:  "postgres://user@db.example/app?sslmode=disable",
 			want: "postgres://user@db.example/app?sslmode=disable",

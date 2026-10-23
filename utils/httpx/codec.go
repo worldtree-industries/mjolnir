@@ -8,6 +8,8 @@ import (
 	"mime"
 	"net/http"
 	"strings"
+
+	"github.com/dfryer1193/mjolnir/middleware"
 )
 
 // DefaultMaxBodyBytes is the request-body limit used by a zero Codec and by
@@ -91,7 +93,7 @@ func (c Codec) Respond(w http.ResponseWriter, _ *http.Request, status int, paylo
 		return mustProblem(http.StatusInternalServerError, "invalid_status",
 			"", fmt.Errorf("httpx: invalid response status %d", status))
 	}
-	if responseStarted(w) {
+	if middleware.ResponseStarted(w) {
 		return mustProblem(http.StatusInternalServerError, "response_started",
 			"", errors.New("httpx: response already started"))
 	}

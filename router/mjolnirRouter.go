@@ -160,7 +160,7 @@ func handlePanic(lg *slog.Logger, w http.ResponseWriter, r *http.Request, recove
 
 	attrs := panicAttrs(r, recovered)
 
-	if responseStarted(w) {
+	if enhancedmiddleware.ResponseStarted(w) {
 		attrs = append(attrs, slog.Bool("response_started", true))
 		lg.ErrorContext(r.Context(), "panic after response started", attrs...)
 		panic(http.ErrAbortHandler)
@@ -198,11 +198,6 @@ func panicAttrs(r *http.Request, recovered any) []any {
 		attrs = append(attrs, slog.String("request_id", id))
 	}
 	return attrs
-}
-
-func responseStarted(w http.ResponseWriter) bool {
-	rw, ok := w.(interface{ Status() int })
-	return ok && rw.Status() != 0
 }
 
 // Serve runs srv until ctx is cancelled, then drains and shuts it down.

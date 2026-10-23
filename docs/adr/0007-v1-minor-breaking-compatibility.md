@@ -10,7 +10,7 @@ are off the table: they remain possible as a `/v2` rename.
 
 The pre-adoption review changes public shapes across `router`, `middleware`, `health`, and
 `utils/*`: the request-identity policy, the access-log and response-writing modules, the
-config loader, and the log name API. Under SemVer these are major changes, but ADR-0006
+config loader, and the HTTP problem layer. Under SemVer these are major changes, but ADR-0006
 makes a major release a module-path rename to `/v2`, which touches every import in this
 repository and every service that adopts it.
 

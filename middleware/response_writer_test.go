@@ -83,6 +83,24 @@ func (w *flushPusherReaderWriter) ReadFrom(src io.Reader) (int64, error) {
 	return io.Copy(w.baseWriter, src)
 }
 
+type pusherWriter struct {
+	*baseWriter
+}
+
+func (w *pusherWriter) Push(string, *http.PushOptions) error {
+	return nil
+}
+
+type flushPusherWriter struct {
+	*baseWriter
+}
+
+func (w *flushPusherWriter) Flush() {}
+
+func (w *flushPusherWriter) Push(string, *http.PushOptions) error {
+	return nil
+}
+
 func TestNewResponseWriterPreservesCapabilitiesExactly(t *testing.T) {
 	t.Parallel()
 
@@ -128,6 +146,19 @@ func TestNewResponseWriterPreservesCapabilitiesExactly(t *testing.T) {
 			wantFlusher:    true,
 			wantPusher:     true,
 			wantReaderFrom: true,
+		},
+		{
+			name:       "http2 pusher only",
+			writer:     &pusherWriter{newBaseWriter()},
+			protoMajor: 2,
+			wantPusher: true,
+		},
+		{
+			name:        "http2 flusher and pusher",
+			writer:      &flushPusherWriter{newBaseWriter()},
+			protoMajor:  2,
+			wantFlusher: true,
+			wantPusher:  true,
 		},
 	}
 
