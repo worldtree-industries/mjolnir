@@ -12,18 +12,17 @@ import (
 	"github.com/dfryer1193/mjolnir/utils/log"
 )
 
-const (
-	readHeaderTimeout = 5 * time.Second
-	drainWindow       = 10 * time.Second
-)
+const drainWindow = 10 * time.Second
 
 func main() {
 	lg := log.GetLogger("example")
 	codec := httpx.NewCodec(0)
 
-	r, err := router.New(health.Config{
-		Started: health.AlwaysStarted,
-		Ready:   health.AlwaysReady,
+	r, err := router.New(router.Config{
+		Health: health.Config{
+			Started: health.AlwaysStarted,
+			Ready:   health.AlwaysReady,
+		},
 	})
 	if err != nil {
 		lg.Error("Failed to build router", "error", err)
@@ -59,13 +58,11 @@ func main() {
 		return httpx.ServiceUnavailable(fmt.Errorf("this is an error"))
 	}))
 
-	lg.Info("Server starting on :8080")
+	address := ":8080"
 
-	srv := &http.Server{
-		Addr:              ":8080",
-		Handler:           r,
-		ReadHeaderTimeout: readHeaderTimeout,
-	}
+	lg.Info("Server starting", "address", address)
+
+	srv := router.NewServer(address, r)
 
 	if runErr := r.Run(srv, drainWindow); runErr != nil {
 		lg.Error("Server failed", "error", runErr)
