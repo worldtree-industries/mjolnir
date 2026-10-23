@@ -3,13 +3,14 @@ package middleware
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/google/uuid"
 
 	"github.com/dfryer1193/mjolnir/utils/log"
 )
@@ -58,12 +59,13 @@ func TestRequestLogger(t *testing.T) {
 			method: http.MethodGet,
 			path:   "/implicit",
 			handlerFunc: func(w http.ResponseWriter, r *http.Request) {
-				w.Write([]byte("test"))
+				_, _ = w.Write([]byte("test"))
 			},
 			expectedCode: http.StatusOK,
 			expectedLogs: []string{
 				"request completed",
 				`"status":200`,
+				`"bytes":4`,
 			},
 		},
 	}
@@ -72,25 +74,18 @@ func TestRequestLogger(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			// Capture this subtest's output; the injected logger is isolated
-			// from the process-wide sinks, so subtests can run concurrently.
 			var buf bytes.Buffer
-			handler := requestLogger(http.HandlerFunc(tt.handlerFunc), log.GetLoggerTo("http", &buf))
+			handler := RequestLoggerWith(http.HandlerFunc(tt.handlerFunc), log.GetLoggerTo("http", &buf))
 
-			// Create test request
 			req := httptest.NewRequest(tt.method, tt.path, nil)
 			rr := httptest.NewRecorder()
-
-			// Execute request
 			handler.ServeHTTP(rr, req)
 
-			// Check status code
 			if rr.Code != tt.expectedCode {
 				t.Errorf("handler returned wrong status code: got %v want %v",
 					tt.expectedCode, rr.Code)
 			}
 
-			// Check logs
 			logStr := buf.String()
 			for _, expectedLog := range tt.expectedLogs {
 				if !strings.Contains(logStr, expectedLog) {
@@ -98,12 +93,9 @@ func TestRequestLogger(t *testing.T) {
 				}
 			}
 
-			// Verify log contains latency
 			if !strings.Contains(logStr, "latency") {
 				t.Error("log doesn't contain latency information")
 			}
-
-			// Verify log contains remote_addr
 			if !strings.Contains(logStr, "remote_addr") {
 				t.Error("log doesn't contain remote_addr information")
 			}
@@ -116,21 +108,20 @@ func TestRequestLogger(t *testing.T) {
 func TestRequestLoggerCorrelatesRequestID(t *testing.T) {
 	t.Parallel()
 	var buf bytes.Buffer
+	id := uuid.NewString()
 
-	handler := requestLogger(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	handler := RequestLoggerWith(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}), log.GetLoggerTo("http", &buf))
-	// RequestID wraps RequestLogger so the id is on the context when the
-	// request is logged, as it is on the real router.
 	handler = RequestID(handler)
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.Header.Set("X-Request-ID", "req-abc-123")
+	req.Header.Set("X-Request-ID", id)
 	rr := httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
 
 	logStr := buf.String()
-	if !strings.Contains(logStr, `"request_id":"req-abc-123"`) {
+	if !strings.Contains(logStr, `"request_id":"`+id+`"`) {
 		t.Errorf("request log line missing correlated request_id:\n%s", logStr)
 	}
 }
@@ -141,7 +132,7 @@ func TestRequestLoggerOmitsAbsentRequestID(t *testing.T) {
 	t.Parallel()
 	var buf bytes.Buffer
 
-	handler := requestLogger(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	handler := RequestLoggerWith(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}), log.GetLoggerTo("http", &buf))
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -159,16 +150,16 @@ func TestRequestLoggerOmitsAbsentRequestID(t *testing.T) {
 func TestRequestLoggerConcurrentIsolation(t *testing.T) {
 	t.Parallel()
 	var buf bytes.Buffer
-	inner := requestLogger(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	inner := RequestLoggerWith(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}), log.GetLoggerTo("http", &buf))
 	withID := RequestID(inner)
 
 	const requests = 32
 	var wg sync.WaitGroup
-	for i := range requests {
+	for range requests {
 		wg.Go(func() {
-			id := fmt.Sprintf("id-%d", i)
+			id := uuid.NewString()
 
 			req := httptest.NewRequest(http.MethodGet, "/with/"+id, nil)
 			req.Header.Set("X-Request-ID", id)
@@ -205,84 +196,79 @@ func TestRequestLoggerConcurrentIsolation(t *testing.T) {
 	}
 }
 
-func TestResponseWriter(t *testing.T) {
+// TestRequestLoggerEmitsOnPanic proves the access line is deferred rather than
+// following next.ServeHTTP. The recoverer lives outside this test.
+func TestRequestLoggerEmitsOnPanic(t *testing.T) {
 	t.Parallel()
-	tests := []struct {
-		name         string
-		writeHeader  bool
-		writeBody    bool
-		expectedCode int
-	}{
-		{
-			name:         "explicit header",
-			writeHeader:  true,
-			writeBody:    true,
-			expectedCode: http.StatusCreated,
-		},
-		{
-			name:         "implicit header",
-			writeHeader:  false,
-			writeBody:    true,
-			expectedCode: http.StatusOK,
-		},
-		{
-			name:         "header only",
-			writeHeader:  true,
-			writeBody:    false,
-			expectedCode: http.StatusNoContent,
-		},
+	var buf bytes.Buffer
+
+	handler := RequestLoggerWith(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		panic("boom")
+	}), log.GetLoggerTo("http", &buf))
+	recovered := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() { _ = recover() }()
+		handler.ServeHTTP(w, r)
+	})
+
+	recovered.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/panic", nil))
+
+	if !strings.Contains(buf.String(), "request completed") {
+		t.Errorf("access line missing after panic:\n%s", buf.String())
+	}
+}
+
+// TestResponseWriterPreservesCapabilities uses a real server because a
+// ResponseRecorder cannot model Flusher, Hijacker, or ReaderFrom.
+func TestResponseWriterPreservesCapabilities(t *testing.T) {
+	t.Parallel()
+
+	type capabilities struct {
+		Flusher    bool `json:"flusher"`
+		Hijacker   bool `json:"hijacker"`
+		ReaderFrom bool `json:"reader_from"`
+		Unwrap     bool `json:"unwrap"`
+		FlushErr   bool `json:"flush_error"`
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			base := httptest.NewRecorder()
-			rw := &responseWriter{w: base, status: http.StatusOK}
+	handler := RequestLoggerWith(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, flusher := w.(http.Flusher)
+		_, hijacker := w.(http.Hijacker)
+		_, readerFrom := w.(io.ReaderFrom)
+		unwrapper, unwrap := w.(interface{ Unwrap() http.ResponseWriter })
 
-			if tt.writeHeader {
-				statusCode := http.StatusCreated
-				if !tt.writeBody {
-					statusCode = http.StatusNoContent
-				}
-				rw.WriteHeader(statusCode)
-
-				// Test multiple WriteHeader calls
-				rw.WriteHeader(http.StatusOK) // Should be ignored
-
-				if rw.status != statusCode {
-					t.Errorf("expected status %d, got %d",
-						statusCode, rw.status)
-				}
-			}
-
-			if tt.writeBody {
-				n, err := rw.Write([]byte("test"))
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-				if n != len("test") {
-					t.Errorf("expected %d bytes, wrote %d bytes",
-						len("test"), n)
-				}
-			}
-
-			if rw.status != tt.expectedCode {
-				t.Errorf("expected status %d, got %d",
-					tt.expectedCode, rw.status)
-			}
-
-			if tt.writeHeader {
-				// Test Header()
-				rw.Header().Set("X-Test", "test")
-				if base.Header().Get("X-Test") != "test" {
-					t.Error("Header() method not working correctly")
-				}
-			}
+		_ = json.NewEncoder(w).Encode(capabilities{
+			Flusher:    flusher,
+			Hijacker:   hijacker,
+			ReaderFrom: readerFrom,
+			Unwrap:     unwrap && unwrapper.Unwrap() != nil,
+			FlushErr:   http.NewResponseController(w).Flush() != nil,
 		})
+	}), log.GetLoggerTo("http", io.Discard))
+
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+
+	resp, err := http.Get(srv.URL)
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var got capabilities
+	if decodeErr := json.NewDecoder(resp.Body).Decode(&got); decodeErr != nil {
+		t.Fatalf("decode: %v", decodeErr)
+	}
+
+	if !got.Flusher || !got.Hijacker || !got.ReaderFrom || !got.Unwrap {
+		t.Errorf("capabilities stripped: %+v", got)
+	}
+	if got.FlushErr {
+		t.Error("ResponseController.Flush failed through the wrapper")
 	}
 }
 
 func BenchmarkRequestLogger(b *testing.B) {
-	handler := requestLogger(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	handler := RequestLoggerWith(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}), log.GetLoggerTo("http", io.Discard))
 

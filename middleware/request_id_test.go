@@ -4,80 +4,77 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+
+	"github.com/google/uuid"
 )
 
 func TestRequestID(t *testing.T) {
 	t.Parallel()
+
+	valid := uuid.NewString()
+	urn := "urn:uuid:" + valid
+	braced := "{" + valid + "}"
+	hex32 := strings.ReplaceAll(valid, "-", "")
+
 	tests := []struct {
-		name            string
-		existingReqID   string
-		wantHeaderMatch bool
+		name      string
+		inbound   string
+		want      string // exact canonical value, or "" for "generated"
+		generated bool
 	}{
-		{
-			name:            "no existing request ID",
-			existingReqID:   "",
-			wantHeaderMatch: true,
-		},
-		{
-			name:            "existing request ID",
-			existingReqID:   "test-request-id-123",
-			wantHeaderMatch: true,
-		},
+		{name: "no header", inbound: "", generated: true},
+		{name: "canonical UUID", inbound: valid, want: valid},
+		{name: "uppercase UUID", inbound: strings.ToUpper(valid), want: valid},
+		{name: "URN form", inbound: urn, want: valid},
+		{name: "braced form", inbound: braced, want: valid},
+		{name: "32 hex", inbound: hex32, want: valid},
+		{name: "malformed", inbound: "test-request-id-123", generated: true},
+		{name: "oversized", inbound: strings.Repeat("a", 4096), generated: true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Create a mock handler to verify the context
-			var capturedReqID string
-			nextHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				capturedReqID = GetRequestID(r.Context())
-			})
+			var captured string
+			handler := RequestID(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+				captured = GetRequestID(r.Context())
+			}))
 
-			// Create the middleware handler
-			handler := RequestID(nextHandler)
-
-			// Create test request
 			req := httptest.NewRequest(http.MethodGet, "/", nil)
-			if tt.existingReqID != "" {
-				req.Header.Set("X-Request-ID", tt.existingReqID)
+			if tt.inbound != "" {
+				req.Header.Set("X-Request-ID", tt.inbound)
 			}
-
-			// Create response recorder
 			rr := httptest.NewRecorder()
-
-			// Execute request
 			handler.ServeHTTP(rr, req)
 
-			// Get response headers
 			respID := rr.Header().Get("X-Request-ID")
-
-			// Verify response header exists
 			if respID == "" {
-				t.Error("X-Request-ID header not set in response")
+				t.Fatal("X-Request-ID header not set in response")
+			}
+			if captured != respID {
+				t.Errorf("context request ID (%s) doesn't match header value (%s)", captured, respID)
 			}
 
-			// Verify request ID was added to context
-			if capturedReqID == "" {
-				t.Error("request ID not found in context")
+			parsed, err := uuid.Parse(respID)
+			if err != nil {
+				t.Fatalf("response request ID %q is not a UUID: %v", respID, err)
+			}
+			if parsed.String() != respID {
+				t.Errorf("response request ID %q is not canonical (%q)", respID, parsed.String())
 			}
 
-			// Verify header matches context value
-			if capturedReqID != respID {
-				t.Errorf("context request ID (%s) doesn't match header value (%s)",
-					capturedReqID, respID)
-			}
-
-			// If we provided a request ID, verify it was preserved
-			if tt.existingReqID != "" && respID != tt.existingReqID {
-				t.Errorf("expected request ID %s, got %s", tt.existingReqID, respID)
-			}
-
-			// Verify UUID format when no request ID was provided
-			if tt.existingReqID == "" {
-				if len(respID) != 36 { // UUID v4 length
-					t.Errorf("generated request ID %s is not a valid UUID", respID)
+			if tt.generated {
+				if parsed.Version() != 4 {
+					t.Errorf("generated request ID version = %d, want 4", parsed.Version())
 				}
+				if respID == tt.inbound {
+					t.Error("invalid client value was echoed instead of replaced")
+				}
+				return
+			}
+			if respID != tt.want {
+				t.Errorf("request ID = %q, want %q", respID, tt.want)
 			}
 		})
 	}
@@ -119,19 +116,19 @@ func TestGetRequestID(t *testing.T) {
 
 func TestGenerateRequestID(t *testing.T) {
 	t.Parallel()
-	// Test multiple generations to ensure uniqueness
 	ids := make(map[string]bool)
 	iterations := 1000
 
 	for range iterations {
 		id := generateRequestID()
 
-		// Verify UUID length
-		if len(id) != 36 {
-			t.Errorf("generated ID length = %d, want 36", len(id))
+		parsed, err := uuid.Parse(id)
+		if err != nil {
+			t.Fatalf("generated ID %q is not a UUID: %v", id, err)
 		}
-
-		// Verify uniqueness
+		if parsed.Version() != 4 {
+			t.Errorf("generated ID version = %d, want 4", parsed.Version())
+		}
 		if ids[id] {
 			t.Errorf("duplicate ID generated: %s", id)
 		}
@@ -140,7 +137,7 @@ func TestGenerateRequestID(t *testing.T) {
 }
 
 func BenchmarkRequestIDMiddleware(b *testing.B) {
-	handler := RequestID(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	handler := RequestID(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rr := httptest.NewRecorder()
 
@@ -151,9 +148,9 @@ func BenchmarkRequestIDMiddleware(b *testing.B) {
 }
 
 func BenchmarkRequestIDMiddlewareWithExisting(b *testing.B) {
-	handler := RequestID(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	handler := RequestID(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.Header.Set("X-Request-ID", "test-request-id")
+	req.Header.Set("X-Request-ID", uuid.NewString())
 	rr := httptest.NewRecorder()
 
 	b.ResetTimer()
