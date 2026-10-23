@@ -4,6 +4,10 @@
 
 Accepted.
 
+Amended by ADR-0007: on the v1 line, minor releases are the breaking channel, so a
+breaking change is labelled `semver:minor` and never shipped as a patch. `semver:major`
+remains available for a future `/v2` rename; it is not used in this round.
+
 ## Context
 
 Releases were cut by hand: 14 lightweight tags from `v0.0.1` to `v1.5.0`, each one a decision someone made at a keyboard. `ci.yml` already ran on `push: [main]`, so the state that would be released was verified, but nothing connected "that run was green" to "a tag exists" — the two facts drifted apart and were reconciled by memory.
