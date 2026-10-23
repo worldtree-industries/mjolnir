@@ -13,7 +13,7 @@ import (
 // Run closes the abort channel on a second signal. Serve cannot reach that
 // path, so the drain sequence is exercised directly.
 func TestServeAbortsTheDrainWindow(t *testing.T) {
-	r, err := New(health.Config{Started: health.AlwaysStarted, Ready: health.AlwaysReady})
+	r, err := New(Config{Health: health.Config{Started: health.AlwaysStarted, Ready: health.AlwaysReady}})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
