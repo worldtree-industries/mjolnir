@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/dfryer1193/mjolnir/utils/log"
@@ -78,4 +79,25 @@ type attributedLine struct {
 	function string
 	file     string
 	line     int
+}
+
+// The exported setter is safe to call from many goroutines at once. It touches
+// only the process-wide handler (no sink writes), and Cleanup leaves the
+// default warning installed afterwards. The race detector is the assertion.
+func TestSetSinkErrorHandlerIsConcurrentSafe(t *testing.T) {
+	t.Cleanup(func() { log.SetSinkErrorHandler(nil) })
+
+	first := func(error) {}
+	second := func(error) {}
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Go(func() {
+			for range 100 {
+				log.SetSinkErrorHandler(first)
+				log.SetSinkErrorHandler(second)
+				log.SetSinkErrorHandler(nil)
+			}
+		})
+	}
+	wg.Wait()
 }
