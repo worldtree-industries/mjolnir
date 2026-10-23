@@ -75,3 +75,25 @@ results are labelled *local probe*. Anything not verified is called out. **Versi
 - Middleware order is `RealIP`, `Recoverer`, `RequestID`, `RequestLogger` (`router/mjolnirRouter.go:45-49`). The access log is skipped on panic because `reqLog.InfoContext` runs after `next.ServeHTTP`, not in a defer (`middleware/request_logger.go:27-45`). `Recoverer` is outside the logger, so it handles the panic without the request-scoped log context, and a response may already be committed, leaving the client a truncated 2xx rather than a 500.
 - chi's `Recoverer` prints the stack to stderr in colour, attempts `WriteHeader(500)` (which `net/http` ignores once headers are sent), and skips it for `Connection: Upgrade` ([source](https://github.com/go-chi/chi/blob/v5.2.1/middleware/recoverer.go)); it does not use the application's structured logger. *Local probe:* the panic trace appeared on stderr, outside the JSON stream.
 - **Relevance to mjolnir:** wrap the access log in a defer, log panics through slog with method/path/request ID, and document that a handler which has already written cannot be converted into a clean 500.
+
+## Resolution (2026-10-23)
+
+The probe was promoted into regression tests and then deleted. This table maps each finding to
+the code and test that now covers it; the work is specified in [#29](https://github.com/worldtree-industries/mjolnir/issues/29).
+
+| # | Resolution | Evidence |
+| --- | --- | --- |
+| 1 | UUID-only `X-Request-ID`, length-bounded before parse, canonicalised or regenerated as v4 | `middleware/request_id.go`, `middleware/request_id_test.go` |
+| 2 | chi v5.5.0; no `RealIP`; forwarding headers trusted only inside configured CIDRs; `RemoteAddr` never mutated | `router/mjolnirRouter.go`, `router/mjolnirRouter_test.go` |
+| 3 | chi's capability-preserving `WrapResponseWriter` exported as `middleware.ResponseWriter` | `middleware/response_writer.go`, `middleware/request_logger_test.go` |
+| 4 | `httpx.Codec`: 1 MiB default, `MaxBytesReader`, 413/415/400 mapping, `mime.ParseMediaType` | `utils/httpx/codec.go`, `utils/httpx/codec_test.go` |
+| 5 | `router.NewServer` baseline: 5s header, 30s read, 120s idle, 1 MiB headers, `WriteTimeout` unset | `router/mjolnirRouter.go`, `router/mjolnirRouter_test.go`, README |
+| 6 | RFC 9457 `Problem`: public 4xx detail, fixed 5xx detail, preserved 5xx status/code, cause logged, started-response detection | `utils/httpx/problem.go`, `utils/httpx/problem_test.go` |
+| 7 | `GetHead`; one total drain budget split into readiness window and shutdown grace | `router/mjolnirRouter.go`, `router/mjolnirRouter_test.go`, `router/drain_test.go` |
+| 8 | `log.SetSinkErrorHandler` for JSON sink failures; default warn-once retained | `utils/log/logger.go`, tests from #37 |
+| 9 | Go 1.27 floor kept because `optional.Option.Map` is a generic method | ADR-0002, ADR-0011 |
+| 10 | Deferred access line; router-owned recoverer logs through slog with stack and request id; started-response panic aborts the connection | `router/mjolnirRouter.go`, `middleware/request_logger.go`, `router/mjolnirRouter_test.go` |
+
+Known limitations retained: `http.Server.Shutdown` does not wait for hijacked connections, and a
+panic after the response has started cannot be turned into a clean 500 — the connection is aborted
+instead so the client does not read the truncation as success.
