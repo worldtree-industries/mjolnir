@@ -28,12 +28,12 @@ A component that formats and delivers log events to a destination. The framework
 |------|------------|
 | **Log Event** | A single structured log entry emitted by the application |
 | **Handler** | A component that formats and delivers log events to a destination |
-| **Named Logger** | A logger obtained by component name via `GetLogger(name)`; the name is the logger's identity and the key for its level |
+| **Named Logger** | A logger obtained by component name via `GetLogger(name)`; the name is an open string identifier chosen by the caller, serving as the logger's identity and the key for its level |
 | **Level** | The minimum threshold for a name: an event is emitted only at or above it |
 | **Default Level** | The level used by a name that has none of its own; `SetDefaultLevel` changes it for all such names |
 | **Source** | The line of code (file and line) that emitted a log event |
 | **Context** | The Go `context.Context`: a carrier for request-scoped metadata such as the request id |
-| **Request ID** | An identifier for one HTTP request, set by the RequestID middleware on the context and echoed in the `X-Request-ID` header; the HTTP layer attaches it to request log lines |
+| **Request ID** | A UUID identifying one HTTP request, set by the RequestID middleware on the context and echoed in the `X-Request-ID` header; a client-supplied value is accepted only when it parses as a UUID, and the HTTP layer attaches it to request log lines |
 | **JSON Stream** | The machine-readable stream, written to a file for Victorialogs/Grafana |
 | **Text Stream** | The human-readable stream, written to stdout for CLI/kubectl |
 | **Option** | A container for a value that may be absent |

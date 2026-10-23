@@ -81,10 +81,12 @@ func newCore(text, json io.Writer) *core {
 
 // GetLogger returns a ready-to-use [*slog.Logger] for the named component.
 // Every line it emits carries the "logger" field set to name and the source
-// file:line of the call. The level in effect for name is checked for every
-// record, so SetLevel and SetDefaultLevel take effect on the next emitted
-// line without re-fetching the logger — including for With()-derived
-// loggers.
+// file:line of the call. The name is an open identifier chosen by the caller,
+// not a closed set: define a const for it if you want typo safety. It is both
+// the "logger" field and the key for SetLevel. The level in effect for name is
+// checked for every record, so SetLevel and SetDefaultLevel take effect on the
+// next emitted line without re-fetching the logger — including for
+// With()-derived loggers.
 //
 // The logger writes to the process-wide sinks (text on stdout, JSON to the
 // configured file), so it is affected by SetJSONFile and UseOutputForTests.

@@ -18,7 +18,7 @@ Single-context: root `CONTEXT.md` + `docs/adr/`. See `docs/agents/domain.md`.
 - Lint alone: `make install-lint && make lint` (golangci-lint; the Makefile holds the only version pin, and CI installs from it)
 - Workflows alone: `make lint-workflows` (actionlint, same pin rule)
 - Fresh clone: `make install-lint && make setup-hooks` (pre-commit runs `make verify`, which needs both linters)
-- Releases: merging a PR to `main` tags it; `semver:major` / `semver:minor` labels set the bump, otherwise it is a patch — ADR-0006. The decision is `scripts/release-plan.sh`; `gh workflow run release.yml` prints what a release would do, without publishing.
+- Releases: merging a PR to `main` tags it; `semver:major` / `semver:minor` labels set the bump, otherwise it is a patch — ADR-0006. On the v1 line, treat a breaking change as a minor, never a patch; this is a convention, not a mechanical check — ADR-0007. A future `/v2` rename remains possible and would use `semver:major`. The decision is `scripts/release-plan.sh`; `gh workflow run release.yml` prints what a release would do, without publishing.
 
 ## Worktrees
 
