@@ -18,7 +18,7 @@ Both inputs are client-supplied claims about who the request is. The library can
 - **`X-Request-ID` is accepted only when it is a UUID.** The middleware checks the length first. Anything longer than the longest spelling `uuid.Parse` accepts (`urn:uuid:` plus 36 characters, 45 bytes) is never parsed. A value that parses is canonicalised with `uuid.Parse(v).String()`. Braces, `urn:uuid:`, upper case, and bare 32-hex all become the lowercase hyphenated form. Every other value, including an empty one, is replaced by a fresh v4 UUID and is never echoed. `GetRequestID` therefore returns a canonical UUID, or `""` when the middleware did not run.
 - **No forwarding header is trusted unless trusted CIDR prefixes are configured.** With no prefixes, `X-Forwarded-For`, `X-Real-IP`, and `True-Client-IP` do not change the resolved client address, and `remote_addr` stays the transport peer. With prefixes, resolution goes through chi's trusted-proxy `ClientIPFrom*` middleware. chi is pinned at v5.5.0.
 
-The request-ID half ships with issue #31. The client-address half needs router configuration and ships with issue #33. Until then the router keeps the deprecated `RealIP` behind a targeted lint suppression that names #33.
+The request-ID half ships with issue #31. The client-address half needs router configuration and ships with issue #33: `router.Config.TrustedProxies` selects chi's `ClientIPFromXFF` over the configured prefixes, and with none the router installs `ClientIPFromRemoteAddr`. `RealIP` is removed.
 
 ## Considered Options
 
@@ -31,4 +31,4 @@ The request-ID half ships with issue #31. The client-address half needs router c
 
 - **This is a breaking change in behaviour.** A caller that propagates non-UUID ids, such as `req-abc-123`, now sees them replaced, and its ids no longer join across services. Such callers must switch to UUIDs. It is released as part of the hardening minor.
 - The nil UUID and non-v4 UUIDs are accepted because they parse. Only generated ids are guaranteed to be v4.
-- A deployment behind a proxy loses the original client address in logs until it configures trusted prefixes (issue #33). This is deliberate. A missing address is safer than a forged one.
+- A deployment behind a proxy loses the original client address in logs until it configures trusted prefixes (`router.Config.TrustedProxies`). This is deliberate. A missing address is safer than a forged one.
