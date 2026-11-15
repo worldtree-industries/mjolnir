@@ -1,4 +1,4 @@
-package middleware
+package middleware_test
 
 import (
 	"bytes"
@@ -11,6 +11,9 @@ import (
 	"sync"
 	"testing"
 
+	chimiddleware "github.com/go-chi/chi/v5/middleware"
+
+	"github.com/dfryer1193/mjolnir/middleware"
 	"github.com/dfryer1193/mjolnir/utils/log"
 )
 
@@ -54,6 +57,17 @@ func TestRequestLogger(t *testing.T) {
 			},
 		},
 		{
+			name:         "nothing written",
+			method:       http.MethodGet,
+			path:         "/empty",
+			handlerFunc:  func(http.ResponseWriter, *http.Request) {},
+			expectedCode: http.StatusOK,
+			expectedLogs: []string{
+				"request completed",
+				`"status":200`, // what net/http sends, not "none yet"
+			},
+		},
+		{
 			name:   "no explicit status code",
 			method: http.MethodGet,
 			path:   "/implicit",
@@ -75,7 +89,7 @@ func TestRequestLogger(t *testing.T) {
 			// Capture this subtest's output; the injected logger is isolated
 			// from the process-wide sinks, so subtests can run concurrently.
 			var buf bytes.Buffer
-			handler := requestLogger(http.HandlerFunc(tt.handlerFunc), log.GetLoggerTo("http", &buf))
+			handler := middleware.RequestLoggerWith(http.HandlerFunc(tt.handlerFunc), log.GetLoggerTo("http", &buf))
 
 			// Create test request
 			req := httptest.NewRequest(tt.method, tt.path, nil)
@@ -117,12 +131,12 @@ func TestRequestLoggerCorrelatesRequestID(t *testing.T) {
 	t.Parallel()
 	var buf bytes.Buffer
 
-	handler := requestLogger(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	handler := middleware.RequestLoggerWith(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}), log.GetLoggerTo("http", &buf))
 	// RequestID wraps RequestLogger so the id is on the context when the
 	// request is logged, as it is on the real router.
-	handler = RequestID(handler)
+	handler = middleware.RequestID(handler)
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("X-Request-ID", "0f8fad5b-d9cb-469f-a165-70867728950e")
@@ -141,7 +155,7 @@ func TestRequestLoggerOmitsAbsentRequestID(t *testing.T) {
 	t.Parallel()
 	var buf bytes.Buffer
 
-	handler := requestLogger(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	handler := middleware.RequestLoggerWith(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}), log.GetLoggerTo("http", &buf))
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -159,10 +173,10 @@ func TestRequestLoggerOmitsAbsentRequestID(t *testing.T) {
 func TestRequestLoggerConcurrentIsolation(t *testing.T) {
 	t.Parallel()
 	var buf bytes.Buffer
-	inner := requestLogger(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	inner := middleware.RequestLoggerWith(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}), log.GetLoggerTo("http", &buf))
-	withID := RequestID(inner)
+	withID := middleware.RequestID(inner)
 
 	const requests = 32
 	var wg sync.WaitGroup
@@ -205,84 +219,121 @@ func TestRequestLoggerConcurrentIsolation(t *testing.T) {
 	}
 }
 
-func TestResponseWriter(t *testing.T) {
+// accessLine serves req through RequestLoggerWith(h) and returns the fields of
+// the single JSON access line. A panic from h is swallowed after the logger
+// has run, as an outer recoverer would.
+func accessLine(t *testing.T, h http.Handler, req *http.Request) map[string]any {
+	t.Helper()
+	var buf bytes.Buffer
+	logged := middleware.RequestLoggerWith(h, log.GetLoggerTo("http", &buf))
+	func() {
+		defer func() { _ = recover() }()
+		logged.ServeHTTP(httptest.NewRecorder(), req)
+	}()
+
+	var lines []map[string]any
+	for line := range strings.SplitSeq(buf.String(), "\n") {
+		if !strings.HasPrefix(line, "{") {
+			continue // text-stream line
+		}
+		var entry map[string]any
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			t.Fatalf("json parse: %v\n%s", err, line)
+		}
+		lines = append(lines, entry)
+	}
+	if len(lines) != 1 {
+		t.Fatalf("got %d access lines, want 1:\n%s", len(lines), buf.String())
+	}
+	return lines[0]
+}
+
+// TestRequestLoggerLogsOnPanic: the access line is written even when the
+// handler panics, with the status that had been sent when it did.
+func TestRequestLoggerLogsOnPanic(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		name         string
-		writeHeader  bool
-		writeBody    bool
-		expectedCode int
+		name    string
+		handler http.HandlerFunc
+		status  float64
+		bytes   float64
 	}{
 		{
-			name:         "explicit header",
-			writeHeader:  true,
-			writeBody:    true,
-			expectedCode: http.StatusCreated,
+			name:    "before any write",
+			handler: func(http.ResponseWriter, *http.Request) { panic("boom") },
+			status:  0, // nothing was sent
+			bytes:   0,
 		},
 		{
-			name:         "implicit header",
-			writeHeader:  false,
-			writeBody:    true,
-			expectedCode: http.StatusOK,
-		},
-		{
-			name:         "header only",
-			writeHeader:  true,
-			writeBody:    false,
-			expectedCode: http.StatusNoContent,
+			name: "after a write",
+			handler: func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusAccepted)
+				_, _ = w.Write([]byte("partial"))
+				panic("boom")
+			},
+			status: http.StatusAccepted,
+			bytes:  float64(len("partial")),
 		},
 	}
-
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			base := httptest.NewRecorder()
-			rw := &responseWriter{w: base, status: http.StatusOK}
-
-			if tt.writeHeader {
-				statusCode := http.StatusCreated
-				if !tt.writeBody {
-					statusCode = http.StatusNoContent
-				}
-				rw.WriteHeader(statusCode)
-
-				// Test multiple WriteHeader calls
-				rw.WriteHeader(http.StatusOK) // Should be ignored
-
-				if rw.status != statusCode {
-					t.Errorf("expected status %d, got %d",
-						statusCode, rw.status)
-				}
+			t.Parallel()
+			line := accessLine(t, tt.handler, httptest.NewRequest(http.MethodGet, "/panic", nil))
+			if line["status"] != tt.status {
+				t.Errorf("status = %v, want %v", line["status"], tt.status)
 			}
-
-			if tt.writeBody {
-				n, err := rw.Write([]byte("test"))
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-				if n != len("test") {
-					t.Errorf("expected %d bytes, wrote %d bytes",
-						len("test"), n)
-				}
+			if line["bytes"] != tt.bytes {
+				t.Errorf("bytes = %v, want %v", line["bytes"], tt.bytes)
 			}
-
-			if rw.status != tt.expectedCode {
-				t.Errorf("expected status %d, got %d",
-					tt.expectedCode, rw.status)
-			}
-
-			if tt.writeHeader {
-				// Test Header()
-				rw.Header().Set("X-Test", "test")
-				if base.Header().Get("X-Test") != "test" {
-					t.Error("Header() method not working correctly")
-				}
+			if line["path"] != "/panic" {
+				t.Errorf("path = %v, want /panic", line["path"])
 			}
 		})
 	}
 }
 
+// TestRequestLoggerLogsBytes: the line carries the body size the handler
+// wrote.
+func TestRequestLoggerLogsBytes(t *testing.T) {
+	t.Parallel()
+	line := accessLine(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("hello, "))
+		_, _ = w.Write([]byte("world"))
+	}), httptest.NewRequest(http.MethodGet, "/", nil))
+	if line["bytes"] != float64(12) {
+		t.Errorf("bytes = %v, want 12", line["bytes"])
+	}
+}
+
+// TestRequestLoggerClientIP: client_ip is the address a ClientIPFrom*
+// middleware resolved, and is absent when none ran.
+func TestRequestLoggerClientIP(t *testing.T) {
+	t.Parallel()
+	ok := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})
+
+	t.Run("resolved", func(t *testing.T) {
+		t.Parallel()
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.RemoteAddr = "203.0.113.7:4711"
+		// The resolver sits outside the logger, as it will on the router.
+		var buf bytes.Buffer
+		h := chimiddleware.ClientIPFromRemoteAddr(middleware.RequestLoggerWith(ok, log.GetLoggerTo("http", &buf)))
+		h.ServeHTTP(httptest.NewRecorder(), req)
+		if !strings.Contains(buf.String(), `"client_ip":"203.0.113.7"`) {
+			t.Errorf("client_ip missing or wrong:\n%s", buf.String())
+		}
+	})
+	t.Run("unresolved", func(t *testing.T) {
+		t.Parallel()
+		line := accessLine(t, ok, httptest.NewRequest(http.MethodGet, "/", nil))
+		if _, present := line["client_ip"]; present {
+			t.Errorf("client_ip should be absent, got %v", line["client_ip"])
+		}
+	})
+}
+
 func BenchmarkRequestLogger(b *testing.B) {
-	handler := requestLogger(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	handler := middleware.RequestLoggerWith(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}), log.GetLoggerTo("http", io.Discard))
 
