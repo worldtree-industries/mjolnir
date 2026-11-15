@@ -125,12 +125,12 @@ func TestRequestLoggerCorrelatesRequestID(t *testing.T) {
 	handler = RequestID(handler)
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.Header.Set("X-Request-ID", "req-abc-123")
+	req.Header.Set("X-Request-ID", "0f8fad5b-d9cb-469f-a165-70867728950e")
 	rr := httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
 
 	logStr := buf.String()
-	if !strings.Contains(logStr, `"request_id":"req-abc-123"`) {
+	if !strings.Contains(logStr, `"request_id":"0f8fad5b-d9cb-469f-a165-70867728950e"`) {
 		t.Errorf("request log line missing correlated request_id:\n%s", logStr)
 	}
 }
@@ -168,7 +168,7 @@ func TestRequestLoggerConcurrentIsolation(t *testing.T) {
 	var wg sync.WaitGroup
 	for i := range requests {
 		wg.Go(func() {
-			id := fmt.Sprintf("id-%d", i)
+			id := fmt.Sprintf("00000000-0000-4000-8000-%012d", i)
 
 			req := httptest.NewRequest(http.MethodGet, "/with/"+id, nil)
 			req.Header.Set("X-Request-ID", id)

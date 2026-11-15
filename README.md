@@ -14,7 +14,7 @@ Mjolnir is an opinionated wrapper around [go-chi/chi](https://github.com/go-chi/
 
 - **Request ID Tracking**: Automatic request ID generation and propagation
   - Generates UUID-based request IDs
-  - Respects existing `X-Request-ID` headers
+  - Accepts an inbound `X-Request-ID` only when it is a UUID, canonicalised to lowercase hyphenated form; any other value is replaced, never echoed (ADR-0007)
   - Adds request ID to response headers
   - Available throughout the request context
 
