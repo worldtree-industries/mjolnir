@@ -6,36 +6,43 @@ import (
 	"strings"
 )
 
-// The client-error helpers take the public detail and an error code. They
-// cannot fail: an empty code is replaced by the status text in snake case
-// ("bad_request", "not_found", ...). Use [NewProblem] to attach a cause.
+// The client-error helpers take an error code and the public detail. An empty
+// code defaults to the status text in snake case. [NewProblem] rejects an
+// empty code instead, but a helper has no error to return it through, so it
+// fills in the default. Use [NewProblem] to attach a cause.
 
-// BadRequest returns a 400 problem.
+// BadRequest returns a 400 problem. An empty code defaults to "bad_request":
+// a helper cannot return an error, so unlike [NewProblem] it does not reject one.
 func BadRequest(code, detail string) *Problem {
 	return clientProblem(http.StatusBadRequest, code, detail)
 }
 
-// Unauthorized returns a 401 problem.
+// Unauthorized returns a 401 problem. An empty code defaults to "unauthorized":
+// a helper cannot return an error, so unlike [NewProblem] it does not reject one.
 func Unauthorized(code, detail string) *Problem {
 	return clientProblem(http.StatusUnauthorized, code, detail)
 }
 
-// Forbidden returns a 403 problem.
+// Forbidden returns a 403 problem. An empty code defaults to "forbidden":
+// a helper cannot return an error, so unlike [NewProblem] it does not reject one.
 func Forbidden(code, detail string) *Problem {
 	return clientProblem(http.StatusForbidden, code, detail)
 }
 
-// NotFound returns a 404 problem.
+// NotFound returns a 404 problem. An empty code defaults to "not_found":
+// a helper cannot return an error, so unlike [NewProblem] it does not reject one.
 func NotFound(code, detail string) *Problem {
 	return clientProblem(http.StatusNotFound, code, detail)
 }
 
-// Conflict returns a 409 problem.
+// Conflict returns a 409 problem. An empty code defaults to "conflict":
+// a helper cannot return an error, so unlike [NewProblem] it does not reject one.
 func Conflict(code, detail string) *Problem {
 	return clientProblem(http.StatusConflict, code, detail)
 }
 
-// UnprocessableEntity returns a 422 problem.
+// UnprocessableEntity returns a 422 problem. An empty code defaults to "unprocessable_entity":
+// a helper cannot return an error, so unlike [NewProblem] it does not reject one.
 func UnprocessableEntity(code, detail string) *Problem {
 	return clientProblem(http.StatusUnprocessableEntity, code, detail)
 }

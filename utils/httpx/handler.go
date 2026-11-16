@@ -51,16 +51,14 @@ func Handler(fn func(http.ResponseWriter, *http.Request) error) http.HandlerFunc
 
 // HandlerWithLogger is [Handler] with the logger supplied by the caller.
 //
-// To see whether the response has started, the handler hands fn a
-// [middleware.ResponseWriter]: the writer it received when that already is
-// one (for example behind [middleware.RequestLogger]), or a new one from
-// [middleware.NewResponseWriter] otherwise.
+// To see whether the response has started, the handler hands fn the writer
+// from [middleware.AsResponseWriter]: the one it received when that already is
+// a [middleware.ResponseWriter] (for example behind [middleware.RequestLogger]),
+// or a new wrapper otherwise. Started-detection therefore always works inside
+// a Handler.
 func HandlerWithLogger(fn func(http.ResponseWriter, *http.Request) error, lg *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		rw, ok := w.(middleware.ResponseWriter)
-		if !ok {
-			rw = middleware.NewResponseWriter(w, r.ProtoMajor)
-		}
+		rw := middleware.AsResponseWriter(w, r)
 		err := fn(rw, r)
 		if err == nil {
 			return
@@ -102,11 +100,14 @@ func requestLogger(lg *slog.Logger, r *http.Request, p *Problem) *slog.Logger {
 // is sent with a fixed generic detail in place of p.Detail. When p.Instance is
 // empty and the request has a request id, instance is "urn:uuid:<request-id>".
 //
-// When w is a [middleware.ResponseWriter] that has already sent a status,
-// WriteProblem writes nothing and returns [ErrResponseStarted]. Any other w
-// cannot report that, so the problem is written unconditionally.
+// Started-detection works only through a [middleware.ResponseWriter]: when w
+// is one and [middleware.ResponseStarted] reports true, WriteProblem writes
+// nothing and returns [ErrResponseStarted]. [Handler] always passes one. A
+// direct caller with any other writer gets the problem written
+// unconditionally, even after a status or body has gone out; wrap w with
+// [middleware.AsResponseWriter] before writing to it to get the check.
 func WriteProblem(w http.ResponseWriter, r *http.Request, p *Problem) error {
-	if rw, ok := w.(middleware.ResponseWriter); ok && rw.Status() != 0 {
+	if middleware.ResponseStarted(w) {
 		return ErrResponseStarted
 	}
 	doc := problemDocument{
