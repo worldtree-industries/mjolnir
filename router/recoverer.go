@@ -1,7 +1,6 @@
 package router
 
 import (
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -17,9 +16,8 @@ import (
 // Before anything is sent it answers with a 500 problem. Once the response
 // has started a second body would corrupt it, so it panics with
 // [http.ErrAbortHandler] instead: net/http then aborts the connection, and
-// the client cannot mistake the truncated body for a complete one. A panic
-// that already is [http.ErrAbortHandler] is the handler asking for that
-// abort, so it passes through unlogged.
+// the client cannot mistake the truncated body for a complete one. Every
+// panic value, [http.ErrAbortHandler] included, is handled this way.
 func recoverer(lg *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -30,10 +28,6 @@ func recoverer(lg *slog.Logger) func(http.Handler) http.Handler {
 				if rec == nil {
 					return
 				}
-				if err, isErr := rec.(error); isErr && errors.Is(err, http.ErrAbortHandler) {
-					panic(rec)
-				}
-
 				started := middleware.ResponseStarted(rw)
 
 				attrs := []slog.Attr{
