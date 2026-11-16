@@ -201,8 +201,9 @@ The drain duration is one budget, split in half:
    `Close`, and `Serve` returns the deadline error.
 
 `/livez` keeps answering 200 throughout: a restart mid-drain would interrupt the
-requests being finished. A second signal closes the server at any point, during
-the serving half or during `Shutdown`.
+requests being finished. Under `Run`, a second signal closes the server at any
+point, during the serving half or during `Shutdown`. `Serve` drains on context
+cancellation and has no abort.
 
 The whole drain fits inside its duration, so a Kubernetes
 `terminationGracePeriodSeconds` must exceed the drain plus whatever the process
