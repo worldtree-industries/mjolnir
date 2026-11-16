@@ -149,8 +149,8 @@ body cannot pass for a complete 200.
 responses (SSE, long downloads) are not cut off. A handler that needs a write
 deadline can set its own with `http.ResponseController.SetWriteDeadline`.
 
-A Router serves one lifetime: a second `Serve` or `Run` returns
-`router.ErrAlreadyServed`.
+A Router serves one lifetime: a second `Serve`, `ServeListener` or `Run`
+returns `router.ErrAlreadyServed`.
 
 ### Health Checks
 
@@ -189,7 +189,20 @@ container, which turns an outage into a restart loop — report dependencies fro
 ### Graceful shutdown
 
 `Router.Run` starts the drain on SIGINT or SIGTERM; `Router.Serve` does the same
-when the context you pass is cancelled.
+when the context you pass is cancelled. Both listen on `srv.Addr` (`:http` when
+empty), and a listen failure, such as an address in use, is returned before any
+drain starts.
+
+`Router.ServeListener(ctx, ln, srv, drain)` serves on a listener you already
+hold instead (socket activation, a pre-bound port, an in-memory listener in
+tests), with the same drain. It owns `ln` from the call on: shutting down
+closes it. For TLS, wrap the listener first:
+
+```go
+ln, err := net.Listen("tcp", ":8443")
+if err != nil { ... }
+err = r.ServeListener(ctx, tls.NewListener(ln, tlsConfig), router.NewServer("", r), 10*time.Second)
+```
 
 The drain duration is one budget, split in half:
 
@@ -198,7 +211,7 @@ The drain duration is one budget, split in half:
    routing to the process.
 3. `Shutdown` runs with the second half as its deadline, letting in-flight
    requests finish. A request still running at the deadline is dropped by
-   `Close`, and `Serve` returns the deadline error.
+   `Close`, and `Serve` or `ServeListener` returns the deadline error.
 
 `/livez` keeps answering 200 throughout: a restart mid-drain would interrupt the
 requests being finished. A second signal closes the server at any point, during
