@@ -107,6 +107,18 @@ func TestHandlerWritesClientProblemWithoutCause(t *testing.T) {
 	}
 }
 
+func TestHelperSendsAnEmptyCodeUnchanged(t *testing.T) {
+	t.Parallel()
+	rec, _ := serve(t, func(http.ResponseWriter, *http.Request) error {
+		return httpx.BadRequest("", "x")
+	})
+
+	got := decodeProblem(t, rec.Body.Bytes())
+	if code, ok := got["code"]; !ok || code != "" {
+		t.Errorf("code member = %v (present %v), want \"\"", code, ok)
+	}
+}
+
 func TestHandlerKeepsServerStatusAndMasksDetail(t *testing.T) {
 	t.Parallel()
 	cause := fmt.Errorf("dial postgres://admin:hunter2@db: %w", errors.New("connection refused"))

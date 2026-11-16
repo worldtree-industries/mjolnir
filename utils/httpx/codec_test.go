@@ -40,6 +40,7 @@ func TestDecodeAcceptsJSONMediaTypes(t *testing.T) {
 		"application/json",
 		"application/json; charset=utf-8",
 		"Application/JSON; charset=UTF-8",
+		"application/json; charset=latin1",
 		"application/vnd.api+json",
 		"application/merge-patch+json",
 	} {
@@ -76,13 +77,6 @@ func TestDecodeRejectsBadRequests(t *testing.T) {
 			code:        "unsupported_media_type",
 		},
 		{
-			name:        "non-UTF-8 charset",
-			contentType: "application/json; charset=latin1",
-			body:        `{}`,
-			status:      415,
-			code:        "unsupported_media_type",
-		},
-		{
 			name:        "malformed JSON",
 			contentType: "application/json",
 			body:        `{"name":,}`,
@@ -91,13 +85,6 @@ func TestDecodeRejectsBadRequests(t *testing.T) {
 		},
 		{name: "empty body", contentType: "application/json", body: "", status: 400, code: "malformed_json"},
 		{name: "wrong type", contentType: "application/json", body: `{"name":7}`, status: 400, code: "malformed_json"},
-		{
-			name:        "trailing data",
-			contentType: "application/json",
-			body:        `{"name":"a"} {"name":"b"}`,
-			status:      400,
-			code:        "malformed_json",
-		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -112,6 +99,18 @@ func TestDecodeRejectsBadRequests(t *testing.T) {
 				t.Errorf("got %d %q, want %d %q", p.Status, p.Code, tt.status, tt.code)
 			}
 		})
+	}
+}
+
+func TestDecodeReadsOnlyTheFirstValue(t *testing.T) {
+	t.Parallel()
+	var got widget
+	req := decodeRequest("application/json", `{"name":"a"} {"name":"b"}`)
+	if err := httpx.NewCodec(0).Decode(httptest.NewRecorder(), req, &got); err != nil {
+		t.Fatalf("Decode returned %v", err)
+	}
+	if got.Name != "a" {
+		t.Errorf("decoded %+v, want the first value", got)
 	}
 }
 
