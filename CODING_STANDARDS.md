@@ -8,7 +8,7 @@ Before flagging a technical claim in a spec or ADR — a language-version requir
 
 ## Behaviour beyond the spec is a finding
 
-Every behaviour the diff adds traces to a line in its issue or spec: an extra validation, header, default, special case, or rejected input that no line asked for is a surprise for the caller, however small or defensive. Report each one as a finding that must be resolved before merge, in one of two ways: remove it, or amend the issue so the behaviour is specified. When removing it would itself surprise (a panic in place of an error, a protocol violation, divergence from the library's own defaults), name that trade-off in the finding so the author can choose.
+Every behaviour the diff adds traces to a line in its issue or spec: an extra validation, header, default, special case, or rejected input that no line asked for is a surprise for the caller, however small or defensive. Report each one as a finding that must be resolved before merge, in one of two ways: remove it, or amend the issue so the behaviour is specified. When removing it would itself surprise (a panic in place of an error, a protocol violation, divergence from the library's own defaults), name that trade-off in the finding so the author can choose. When the change has no issue, its PR body is the spec.
 
 ## Failure is reported as `error`
 
