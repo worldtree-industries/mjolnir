@@ -32,16 +32,20 @@ type problemDocument struct {
 	Code     string `json:"code"`
 }
 
-// Handler adapts fn to an [http.HandlerFunc] that writes the [*Problem] fn
-// returns. It logs through the "httpx" named logger; use [HandlerWithLogger]
-// to choose the logger.
+// Handler adapts fn to an [http.HandlerFunc] that turns the error fn returns
+// into a problem response. It logs through the "httpx" named logger; use
+// [HandlerWithLogger] to choose the logger.
+//
+// A nil error writes nothing. An error that is or wraps a [*Problem] (found
+// with [errors.AsType], so wrapping with %w keeps it) sends that problem. Any
+// other error is sent as [Internal] with that error as the cause.
 //
 // A 5xx is logged at Error with the method, path, request id, status, code,
 // server-only detail, and cause; the client receives the fixed generic detail.
 // A 4xx is not logged. If fn has already started the response (sent a status
 // or any body) when it returns a problem, nothing more is written: the
 // problem is logged at Warn instead of being appended to the body.
-func Handler(fn func(http.ResponseWriter, *http.Request) *Problem) http.HandlerFunc {
+func Handler(fn func(http.ResponseWriter, *http.Request) error) http.HandlerFunc {
 	return HandlerWithLogger(fn, log.GetLogger("httpx"))
 }
 
@@ -51,15 +55,19 @@ func Handler(fn func(http.ResponseWriter, *http.Request) *Problem) http.HandlerF
 // [middleware.ResponseWriter]: the writer it received when that already is
 // one (for example behind [middleware.RequestLogger]), or a new one from
 // [middleware.NewResponseWriter] otherwise.
-func HandlerWithLogger(fn func(http.ResponseWriter, *http.Request) *Problem, lg *slog.Logger) http.HandlerFunc {
+func HandlerWithLogger(fn func(http.ResponseWriter, *http.Request) error, lg *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		rw, ok := w.(middleware.ResponseWriter)
 		if !ok {
 			rw = middleware.NewResponseWriter(w, r.ProtoMajor)
 		}
-		p := fn(rw, r)
-		if p == nil {
+		err := fn(rw, r)
+		if err == nil {
 			return
+		}
+		p, ok := errors.AsType[*Problem](err)
+		if !ok || p == nil {
+			p = Internal(err)
 		}
 		reqLog := requestLogger(lg, r, p)
 		if p.Status >= http.StatusInternalServerError {
@@ -68,11 +76,11 @@ func HandlerWithLogger(fn func(http.ResponseWriter, *http.Request) *Problem, lg 
 				slog.Any("error", p.cause),
 			)
 		}
-		switch err := WriteProblem(rw, r, p); {
-		case errors.Is(err, ErrResponseStarted):
+		switch writeErr := WriteProblem(rw, r, p); {
+		case errors.Is(writeErr, ErrResponseStarted):
 			reqLog.WarnContext(r.Context(), "problem not sent: response already started")
-		case err != nil:
-			reqLog.ErrorContext(r.Context(), "failed to write problem", slog.Any("error", err))
+		case writeErr != nil:
+			reqLog.ErrorContext(r.Context(), "failed to write problem", slog.Any("error", writeErr))
 		}
 	}
 }

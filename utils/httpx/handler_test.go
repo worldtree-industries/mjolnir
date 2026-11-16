@@ -43,7 +43,7 @@ func (b *syncBuffer) String() string {
 // inbound request id, and returns the recorded response and the log output.
 func serve(
 	t *testing.T,
-	fn func(http.ResponseWriter, *http.Request) *httpx.Problem,
+	fn func(http.ResponseWriter, *http.Request) error,
 ) (*httptest.ResponseRecorder, string) {
 	t.Helper()
 	logs := &syncBuffer{}
@@ -71,7 +71,7 @@ func TestHandlerWritesClientProblemWithoutCause(t *testing.T) {
 	t.Parallel()
 	secret := fmt.Errorf("query users: password authentication failed for user %q", "admin")
 
-	rec, _ := serve(t, func(http.ResponseWriter, *http.Request) *httpx.Problem {
+	rec, _ := serve(t, func(http.ResponseWriter, *http.Request) error {
 		p, err := httpx.NewProblem(http.StatusConflict, "widget_exists", "a widget with that name exists", secret)
 		if err != nil {
 			t.Fatalf("NewProblem: %v", err)
@@ -111,7 +111,7 @@ func TestHandlerKeepsServerStatusAndMasksDetail(t *testing.T) {
 	t.Parallel()
 	cause := fmt.Errorf("dial postgres://admin:hunter2@db: %w", errors.New("connection refused"))
 
-	rec, logs := serve(t, func(http.ResponseWriter, *http.Request) *httpx.Problem {
+	rec, logs := serve(t, func(http.ResponseWriter, *http.Request) error {
 		p, err := httpx.NewProblem(http.StatusServiceUnavailable, "db_unavailable", "primary pool is draining", cause)
 		if err != nil {
 			t.Fatalf("NewProblem: %v", err)
@@ -151,7 +151,7 @@ func TestHandlerKeepsServerStatusAndMasksDetail(t *testing.T) {
 
 func TestHandlerDoesNotLogClientProblems(t *testing.T) {
 	t.Parallel()
-	_, logs := serve(t, func(http.ResponseWriter, *http.Request) *httpx.Problem {
+	_, logs := serve(t, func(http.ResponseWriter, *http.Request) error {
 		return httpx.NotFound("no_widget", "no such widget")
 	})
 	if logs != "" {
@@ -161,7 +161,7 @@ func TestHandlerDoesNotLogClientProblems(t *testing.T) {
 
 func TestProblemOmitsInstanceWithoutRequestID(t *testing.T) {
 	t.Parallel()
-	h := httpx.HandlerWithLogger(func(http.ResponseWriter, *http.Request) *httpx.Problem {
+	h := httpx.HandlerWithLogger(func(http.ResponseWriter, *http.Request) error {
 		return httpx.BadRequest("bad", "bad input")
 	}, log.GetLoggerTo("httpx", &syncBuffer{}))
 	rec := httptest.NewRecorder()
@@ -175,7 +175,7 @@ func TestProblemOmitsInstanceWithoutRequestID(t *testing.T) {
 func TestHandlerLogsEachRequestOnItsOwn(t *testing.T) {
 	t.Parallel()
 	logs := &syncBuffer{}
-	h := httpx.HandlerWithLogger(func(http.ResponseWriter, *http.Request) *httpx.Problem {
+	h := httpx.HandlerWithLogger(func(http.ResponseWriter, *http.Request) error {
 		return httpx.Internal(errors.New("boom"))
 	}, log.GetLoggerTo("httpx", logs))
 

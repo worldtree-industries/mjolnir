@@ -34,7 +34,8 @@ const (
 	malformedJSONDetail        = "The request body is not a single valid JSON value of the expected shape."
 )
 
-// Decode reads one JSON value from the request body into dst.
+// Decode reads one JSON value from the request body into dst. It returns nil
+// on success; on failure the error is a [*Problem] for [Handler] to send.
 //
 // The Content-Type must be application/json or a +json type (such as
 // application/vnd.api+json); a charset parameter, if any, must be UTF-8.
@@ -45,7 +46,7 @@ const (
 // through [http.MaxBytesReader], so the server closes the connection after
 // the response. A dst that is not a non-nil pointer is a server bug and
 // returns a 500. The underlying error is kept as the cause and never sent.
-func (c Codec) Decode(w http.ResponseWriter, r *http.Request, dst any) *Problem {
+func (c Codec) Decode(w http.ResponseWriter, r *http.Request, dst any) error {
 	if !isJSONMediaType(r.Header.Get("Content-Type")) {
 		return clientProblem(http.StatusUnsupportedMediaType, "unsupported_media_type", unsupportedMediaTypeDetail)
 	}
@@ -108,14 +109,15 @@ func isJSONMediaType(contentType string) bool {
 	return mediaType == "application/json" || strings.HasSuffix(mediaType, "+json")
 }
 
-// Respond writes payload as a JSON response with the given status. The payload
+// Respond writes payload as a JSON response with the given status. It returns
+// nil on success and a [*Problem] on failure. The payload
 // is marshalled before anything is written, so a marshal failure returns a 500
 // problem and leaves the response untouched for [Handler] to write.
 //
 // A failed write (typically a client that went away) also returns a 500
 // problem; by then the response has started, so [Handler] logs it rather than
 // sending it.
-func (Codec) Respond(w http.ResponseWriter, _ *http.Request, status int, payload any) *Problem {
+func (Codec) Respond(w http.ResponseWriter, _ *http.Request, status int, payload any) error {
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return Internal(fmt.Errorf("httpx: marshal response: %w", err))

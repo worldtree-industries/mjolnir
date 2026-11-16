@@ -30,7 +30,7 @@ func get(t *testing.T, srv *httptest.Server) (int, string, string) {
 
 func TestHandlerDoesNotConcatenateBodies(t *testing.T) {
 	t.Parallel()
-	writeThenFail := func(w http.ResponseWriter, _ *http.Request) *httpx.Problem {
+	writeThenFail := func(w http.ResponseWriter, _ *http.Request) error {
 		w.Header().Set("Content-Type", "text/plain")
 		_, _ = io.WriteString(w, "partial")
 		return httpx.Internal(errors.New("stream broke"))
@@ -65,7 +65,7 @@ func TestHandlerDoesNotConcatenateBodies(t *testing.T) {
 
 func TestHandlerTreatsHeaderOnlyResponseAsStarted(t *testing.T) {
 	t.Parallel()
-	h := httpx.HandlerWithLogger(func(w http.ResponseWriter, _ *http.Request) *httpx.Problem {
+	h := httpx.HandlerWithLogger(func(w http.ResponseWriter, _ *http.Request) error {
 		w.WriteHeader(http.StatusAccepted)
 		return httpx.BadRequest("late", "too late")
 	}, log.GetLoggerTo("httpx", io.Discard))

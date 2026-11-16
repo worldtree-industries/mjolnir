@@ -1,6 +1,7 @@
 package httpx_test
 
 import (
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +14,16 @@ import (
 
 type widget struct {
 	Name string `json:"name"`
+}
+
+// asProblem returns the problem err carries, failing the test if it has none.
+func asProblem(t *testing.T, err error) *httpx.Problem {
+	t.Helper()
+	p, ok := errors.AsType[*httpx.Problem](err)
+	if !ok {
+		t.Fatalf("error %v (%T) is not a problem", err, err)
+	}
+	return p
 }
 
 func decodeRequest(contentType, body string) *http.Request {
@@ -35,9 +46,9 @@ func TestDecodeAcceptsJSONMediaTypes(t *testing.T) {
 		t.Run(ct, func(t *testing.T) {
 			t.Parallel()
 			var got widget
-			p := httpx.NewCodec(0).Decode(httptest.NewRecorder(), decodeRequest(ct, `{"name":"gear"}`), &got)
-			if p != nil {
-				t.Fatalf("Decode returned %v", p)
+			err := httpx.NewCodec(0).Decode(httptest.NewRecorder(), decodeRequest(ct, `{"name":"gear"}`), &got)
+			if err != nil {
+				t.Fatalf("Decode returned %v", err)
 			}
 			if got.Name != "gear" {
 				t.Errorf("decoded %+v", got)
@@ -92,10 +103,11 @@ func TestDecodeRejectsBadRequests(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			var got widget
-			p := httpx.NewCodec(0).Decode(httptest.NewRecorder(), decodeRequest(tt.contentType, tt.body), &got)
-			if p == nil {
+			err := httpx.NewCodec(0).Decode(httptest.NewRecorder(), decodeRequest(tt.contentType, tt.body), &got)
+			if err == nil {
 				t.Fatalf("Decode accepted it; decoded %+v", got)
 			}
+			p := asProblem(t, err)
 			if p.Status != tt.status || p.Code != tt.code {
 				t.Errorf("got %d %q, want %d %q", p.Status, p.Code, tt.status, tt.code)
 			}
@@ -127,14 +139,17 @@ func TestDecodeBodyLimit(t *testing.T) {
 			t.Parallel()
 			var got string
 			req := decodeRequest("application/json", jsonBodyOfSize(tt.size))
-			p := tt.codec.Decode(httptest.NewRecorder(), req, &got)
+			err := tt.codec.Decode(httptest.NewRecorder(), req, &got)
 			switch {
-			case !tt.tooBig && p != nil:
-				t.Errorf("a %d-byte body was rejected: %v", tt.size, p)
-			case tt.tooBig && p == nil:
+			case !tt.tooBig && err != nil:
+				t.Errorf("a %d-byte body was rejected: %v", tt.size, err)
+			case tt.tooBig && err == nil:
 				t.Errorf("a %d-byte body was accepted", tt.size)
-			case tt.tooBig && (p.Status != http.StatusRequestEntityTooLarge || p.Code != "request_too_large"):
-				t.Errorf("got %d %q, want 413 request_too_large", p.Status, p.Code)
+			case tt.tooBig:
+				p := asProblem(t, err)
+				if p.Status != http.StatusRequestEntityTooLarge || p.Code != "request_too_large" {
+					t.Errorf("got %d %q, want 413 request_too_large", p.Status, p.Code)
+				}
 			}
 		})
 	}
@@ -143,7 +158,7 @@ func TestDecodeBodyLimit(t *testing.T) {
 func TestOversizedBodyIsAProblemResponse(t *testing.T) {
 	t.Parallel()
 	codec := httpx.NewCodec(64)
-	srv := httptest.NewServer(httpx.HandlerWithLogger(func(w http.ResponseWriter, r *http.Request) *httpx.Problem {
+	srv := httptest.NewServer(httpx.HandlerWithLogger(func(w http.ResponseWriter, r *http.Request) error {
 		var got string
 		return codec.Decode(w, r, &got)
 	}, log.GetLoggerTo("httpx", io.Discard)))
@@ -165,10 +180,10 @@ func TestOversizedBodyIsAProblemResponse(t *testing.T) {
 func TestRespondWritesJSON(t *testing.T) {
 	t.Parallel()
 	rec := httptest.NewRecorder()
-	p := httpx.NewCodec(0).
+	err := httpx.NewCodec(0).
 		Respond(rec, httptest.NewRequest(http.MethodGet, "/", nil), http.StatusCreated, widget{Name: "gear"})
-	if p != nil {
-		t.Fatalf("Respond returned %v", p)
+	if err != nil {
+		t.Fatalf("Respond returned %v", err)
 	}
 	if rec.Code != http.StatusCreated {
 		t.Errorf("status = %d, want 201", rec.Code)
@@ -184,8 +199,11 @@ func TestRespondWritesJSON(t *testing.T) {
 func TestRespondMarshalsBeforeWriting(t *testing.T) {
 	t.Parallel()
 	rec := httptest.NewRecorder()
-	p := httpx.NewCodec(0).Respond(rec, httptest.NewRequest(http.MethodGet, "/", nil), http.StatusOK, func() {})
-	if p == nil || p.Status != http.StatusInternalServerError || p.Unwrap() == nil {
+	err := httpx.NewCodec(0).Respond(rec, httptest.NewRequest(http.MethodGet, "/", nil), http.StatusOK, func() {})
+	if err == nil {
+		t.Fatal("Respond accepted an unmarshalable payload")
+	}
+	if p := asProblem(t, err); p.Status != http.StatusInternalServerError || p.Unwrap() == nil {
 		t.Fatalf("Respond = %v, want a 500 problem with a cause", p)
 	}
 	if rec.Body.Len() != 0 || rec.Header().Get("Content-Type") != "" {
