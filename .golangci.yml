@@ -287,6 +287,21 @@ linters:
       # Default: false
       allow-empty-blank-assignments: true
 
+    forbidigo:
+      forbid:
+        # The linter's default pattern, kept because setting forbid replaces it.
+        - pattern: ^(fmt\.Print(|f|ln)|print|println)$
+        # Tests only (see the exclusion rule for non-test files): timing and
+        # process-signal assertions flake under load. One flaked in CI on #56.
+        - pattern: ^time\.Sleep$
+          msg: "in tests, wait on an event (a channel, a log write), or call synctest.Sleep from the test goroutine of a synctest bubble"
+        # <-time.After(d) is a sleep under another name, and as a select timeout
+        # guard it duplicates go test -timeout, which also dumps every goroutine.
+        - pattern: ^time\.After$
+          msg: "in tests, wait on an event instead of a timer; for a hang, rely on go test -timeout"
+        - pattern: ^syscall\.Kill$
+          msg: "in tests, drive signal handling through a channel instead of signalling the test process"
+
     funcorder:
       # Checks if the exported methods of a structure are placed before the non-exported ones.
       # Default: true
@@ -471,6 +486,10 @@ linters:
       - text: 'comment on exported \S+ \S+ should be of the form ".+"'
         source: '// ?(nolint|TODO)'
         linters: [ revive, staticcheck ]
+      # The time.Sleep, time.After and syscall.Kill bans apply to tests only.
+      - path-except: '_test\.go'
+        text: 'use of `(time\.Sleep|time\.After|syscall\.Kill)` forbidden'
+        linters: [ forbidigo ]
       - path: '_test\.go'
         linters:
           - bodyclose

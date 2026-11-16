@@ -48,6 +48,7 @@ go get github.com/dfryer1193/mjolnir
 ## Requirements
 
 - Go 1.27 or later
+- Linux or macOS. Windows is not a supported platform: nothing is built or tested there, and a Windows build failure is not treated as a bug.
 - github.com/go-chi/chi/v5
 - github.com/google/uuid
 - github.com/jackc/pgx/v5

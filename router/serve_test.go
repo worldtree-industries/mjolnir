@@ -84,7 +84,7 @@ func TestServeListenerServesOnTheCallersListenerUntilTheContextIsDone(t *testing
 
 	cancel()
 
-	if err := waitForServe(t, errCh); err != nil {
+	if err := <-errCh; err != nil {
 		t.Fatalf("ServeListener: %v", err)
 	}
 }
@@ -153,8 +153,12 @@ func TestServeListenerFinishesInFlightRequests(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		s := startMem(t, alwaysHealthy(), 10*time.Second)
 
+		// The request stays in flight until the test releases it, which happens
+		// in the shutdown grace (after the 5s wait), so it is Shutdown, not the
+		// readiness window, that has to let it finish.
+		release := make(chan struct{})
 		s.r.Get("/slow", func(w http.ResponseWriter, _ *http.Request) {
-			<-time.After(time.Second)
+			<-release
 			w.WriteHeader(http.StatusOK)
 		})
 
@@ -164,6 +168,8 @@ func TestServeListenerFinishesInFlightRequests(t *testing.T) {
 
 		synctest.Wait()
 		s.cancel()
+		synctest.Sleep(6 * time.Second)
+		close(release)
 
 		if got := <-slow; got != http.StatusOK {
 			t.Fatalf("in-flight request = %d, want 200", got)
@@ -334,7 +340,7 @@ func TestServeListensOnTheServerAddress(t *testing.T) {
 
 	cancel()
 
-	if err := waitForServe(t, errCh); err != nil {
+	if err := <-errCh; err != nil {
 		t.Fatalf("Serve: %v", err)
 	}
 }
@@ -455,18 +461,6 @@ type failingListener struct{ err error }
 func (l failingListener) Accept() (net.Conn, error) { return nil, l.err }
 func (failingListener) Close() error                { return nil }
 func (failingListener) Addr() net.Addr              { return &net.TCPAddr{} }
-
-func waitForServe(t *testing.T, errCh <-chan error) error {
-	t.Helper()
-
-	select {
-	case err := <-errCh:
-		return err
-	case <-time.After(5 * time.Second):
-		t.Fatal("Serve did not return")
-		return nil
-	}
-}
 
 // listenLoopback listens on a free loopback port. The listener is the test's
 // to close or to hand to the server.
