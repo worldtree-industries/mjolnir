@@ -34,6 +34,7 @@ A component that formats and delivers log events to a destination. The framework
 | **Source** | The line of code (file and line) that emitted a log event |
 | **Context** | The Go `context.Context`: a carrier for request-scoped metadata such as the request id |
 | **Request ID** | An identifier for one HTTP request: always a canonical UUID, either an inbound `X-Request-ID` that parses as one or a generated v4. Set by the RequestID middleware on the context and echoed in the `X-Request-ID` header; the HTTP layer attaches it to request log lines (ADR-0007) |
+| **Started Response** | A response whose status line has been sent (a final status or any body byte); from then on its status cannot change. Detected only through `middleware`'s `ResponseWriter` (`middleware.ResponseStarted`) |
 | **JSON Stream** | The machine-readable stream, written to a file for Victorialogs/Grafana |
 | **Text Stream** | The human-readable stream, written to stdout for CLI/kubectl |
 | **Option** | A container for a value that may be absent |

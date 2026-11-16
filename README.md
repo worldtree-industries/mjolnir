@@ -14,7 +14,7 @@ Mjolnir is an opinionated wrapper around [go-chi/chi](https://github.com/go-chi/
   - Remote address (the transport peer)
   - Client IP (only when a client-IP resolver has run)
   - The line is written in a `defer`, so it is emitted even when the handler panics
-  - Handlers keep the server writer's `http.Flusher`, `http.Hijacker`, and `io.ReaderFrom`, so streaming and `http.NewResponseController` work; `middleware.NewResponseWriter` is the same wrapper for your own middleware
+  - Handlers keep the server writer's `http.Flusher`, `http.Hijacker`, and `io.ReaderFrom`, so streaming and `http.NewResponseController` work; `middleware.AsResponseWriter` reuses or adds the same wrapper for your own middleware, and `middleware.ResponseStarted` reports whether the status line has gone out
   - `RequestLoggerWith` takes an injected `*slog.Logger` instead of the `"http"` component logger
 
 - **Request ID Tracking**: Automatic request ID generation and propagation

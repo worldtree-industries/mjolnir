@@ -20,14 +20,15 @@ func RequestLogger(next http.Handler) http.Handler {
 // RequestLoggerWith is RequestLogger with an injected logger, so callers (and
 // tests, via [log.GetLoggerTo]) choose where access lines go.
 //
-// next receives a ResponseWriter from NewResponseWriter, so it keeps the
-// capabilities of the server's writer. The line is written in a defer, so a
+// next receives a ResponseWriter from AsResponseWriter: w itself when it
+// already is one, otherwise a wrapper that keeps the capabilities of the
+// server's writer. The line is written in a defer, so a
 // panic in next still produces it, carrying the status sent before the
 // panic (0 if nothing was sent).
 func RequestLoggerWith(next http.Handler, lg *slog.Logger) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
-		ww := NewResponseWriter(w, r.ProtoMajor)
+		ww := AsResponseWriter(w, r)
 		returned := false
 
 		defer func() {
