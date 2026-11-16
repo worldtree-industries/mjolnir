@@ -68,22 +68,16 @@ func TestNewProblemBuildsProblem(t *testing.T) {
 func TestClientHelpers(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		name        string
-		build       func(code, detail string) *httpx.Problem
-		status      int
-		defaultCode string
+		name   string
+		build  func(code, detail string) *httpx.Problem
+		status int
 	}{
-		{name: "BadRequest", build: httpx.BadRequest, status: 400, defaultCode: "bad_request"},
-		{name: "Unauthorized", build: httpx.Unauthorized, status: 401, defaultCode: "unauthorized"},
-		{name: "Forbidden", build: httpx.Forbidden, status: 403, defaultCode: "forbidden"},
-		{name: "NotFound", build: httpx.NotFound, status: 404, defaultCode: "not_found"},
-		{name: "Conflict", build: httpx.Conflict, status: 409, defaultCode: "conflict"},
-		{
-			name:        "UnprocessableEntity",
-			build:       httpx.UnprocessableEntity,
-			status:      422,
-			defaultCode: "unprocessable_entity",
-		},
+		{name: "BadRequest", build: httpx.BadRequest, status: 400},
+		{name: "Unauthorized", build: httpx.Unauthorized, status: 401},
+		{name: "Forbidden", build: httpx.Forbidden, status: 403},
+		{name: "NotFound", build: httpx.NotFound, status: 404},
+		{name: "Conflict", build: httpx.Conflict, status: 409},
+		{name: "UnprocessableEntity", build: httpx.UnprocessableEntity, status: 422},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -95,8 +89,8 @@ func TestClientHelpers(t *testing.T) {
 			if p.Title != http.StatusText(tt.status) {
 				t.Errorf("Title = %q", p.Title)
 			}
-			if got := tt.build("", "d").Code; got != tt.defaultCode {
-				t.Errorf("empty code became %q, want %q", got, tt.defaultCode)
+			if got := tt.build("", "d").Code; got != "" {
+				t.Errorf("empty code became %q, want it passed through", got)
 			}
 		})
 	}

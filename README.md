@@ -233,9 +233,10 @@ r.Post("/widgets", httpx.Handler(func(w http.ResponseWriter, r *http.Request) er
 ```
 
 `Decode` accepts `application/json` and any `+json` type (such as
-`application/vnd.api+json`), with an optional UTF-8 charset. It answers 415 for
-any other media type, 413 for a body over the limit, and 400 for a body that is
-not one JSON value of the expected shape. `Respond` marshals the payload before
+`application/vnd.api+json`), whatever its parameters, such as `charset`. It
+answers 415 for any other media type, 413 for a value that runs past the limit,
+and 400 for a body that is not a JSON value of the expected shape. It reads the
+first JSON value only and ignores anything after it, as `json.Decoder` does. `Respond` marshals the payload before
 writing anything, so a marshal failure still becomes a clean 500.
 
 ### Error Handling Utilities
@@ -259,9 +260,10 @@ r.Get("/widgets/{id}", httpx.Handler(func(w http.ResponseWriter, r *http.Request
 ```
 
 The helpers are `BadRequest`, `Unauthorized`, `Forbidden`, `NotFound`,
-`Conflict`, and `UnprocessableEntity` (each takes a code and a public detail;
-an empty code defaults to the status in snake case, such as `not_found`, since
-a helper cannot return an error), and `Internal` and `ServiceUnavailable` (each takes the cause).
+`Conflict`, and `UnprocessableEntity` (each takes a code and a public detail,
+and sends the code as given, even an empty one), and `Internal` and
+`ServiceUnavailable` (each takes the cause and sends the code
+`internal_server_error` or `service_unavailable`).
 `httpx.NewProblem(status, code, detail, cause)` covers any other 4xx or 5xx
 status and code; it rejects other statuses, an empty code, and a 5xx without a
 cause. `httpx.HandlerWithLogger` takes the logger to use instead of the

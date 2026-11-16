@@ -29,23 +29,24 @@ func NewCodec(maxBodyBytes int64) Codec {
 }
 
 const (
-	unsupportedMediaTypeDetail = "The request body must be JSON (application/json or a +json type) encoded as UTF-8."
+	unsupportedMediaTypeDetail = "The request body must be JSON (application/json or a +json type)."
 	tooLargeDetail             = "The request body is larger than the server accepts."
-	malformedJSONDetail        = "The request body is not a single valid JSON value of the expected shape."
+	malformedJSONDetail        = "The request body is not a valid JSON value of the expected shape."
 )
 
 // Decode reads one JSON value from the request body into dst. It returns nil
 // on success; on failure the error is a [*Problem] for [Handler] to send.
+// Anything after the first value is not read, as with [json.Decoder].
 //
 // The Content-Type must be application/json or a +json type (such as
-// application/vnd.api+json); a charset parameter, if any, must be UTF-8.
+// application/vnd.api+json); parameters such as charset are not checked.
 // Otherwise the problem is a 415 with the code "unsupported_media_type". A
-// body that is empty, is not valid JSON, does not fit dst, or holds more than
-// one value is a 400 with the code "malformed_json". A body longer than the
-// codec's limit is a 413 with the code "request_too_large"; the body is read
-// through [http.MaxBytesReader], so the server closes the connection after
-// the response. A dst that is not a non-nil pointer is a server bug and
-// returns a 500. The underlying error is kept as the cause and never sent.
+// body that is empty, is not valid JSON, or does not fit dst is a 400 with
+// the code "malformed_json". A value that runs past the codec's limit is a
+// 413 with the code "request_too_large"; the body is read through
+// [http.MaxBytesReader], so the server closes the connection after the
+// response. A dst that is not a non-nil pointer is a server bug and
+// returns a 500, as #32 specifies. The underlying error is kept as the cause and never sent.
 func (c Codec) Decode(w http.ResponseWriter, r *http.Request, dst any) error {
 	if !isJSONMediaType(r.Header.Get("Content-Type")) {
 		return clientProblem(http.StatusUnsupportedMediaType, "unsupported_media_type", unsupportedMediaTypeDetail)
@@ -66,14 +67,6 @@ func (c Codec) Decode(w http.ResponseWriter, r *http.Request, dst any) error {
 			return Internal(fmt.Errorf("httpx: decode target: %w", err))
 		}
 		return malformed(err)
-	}
-	// Read to the end so trailing data is rejected and counts against the limit.
-	switch _, err := dec.Token(); {
-	case errors.Is(err, io.EOF):
-	case isMaxBytesError(err):
-		return tooLarge(err)
-	default:
-		return malformed(errors.New("httpx: request body holds more than one JSON value"))
 	}
 	return nil
 }
@@ -96,14 +89,10 @@ func malformed(cause error) *Problem {
 }
 
 // isJSONMediaType reports whether contentType is application/json or a
-// type with the +json structured syntax suffix, with no charset other than
-// UTF-8.
+// type with the +json structured syntax suffix. Parameters are ignored.
 func isJSONMediaType(contentType string) bool {
-	mediaType, params, err := mime.ParseMediaType(contentType)
+	mediaType, _, err := mime.ParseMediaType(contentType)
 	if err != nil {
-		return false
-	}
-	if cs, ok := params["charset"]; ok && !strings.EqualFold(cs, "utf-8") {
 		return false
 	}
 	return mediaType == "application/json" || strings.HasSuffix(mediaType, "+json")
