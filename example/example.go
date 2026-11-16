@@ -12,17 +12,18 @@ import (
 	"github.com/dfryer1193/mjolnir/utils/log"
 )
 
-const (
-	readHeaderTimeout = 5 * time.Second
-	drainWindow       = 10 * time.Second
-)
+// drainBudget is the whole shutdown budget: half with readiness at 503, half
+// for Shutdown. Keep it under the orchestrator's termination grace period.
+const drainBudget = 10 * time.Second
 
 func main() {
 	lg := log.GetLogger("example")
 
-	r, err := router.New(health.Config{
-		Started: health.AlwaysStarted,
-		Ready:   health.AlwaysReady,
+	r, err := router.New(router.Config{
+		Health: health.Config{
+			Started: health.AlwaysStarted,
+			Ready:   health.AlwaysReady,
+		},
 	})
 	if err != nil {
 		lg.Error("Failed to build router", "error", err)
@@ -62,13 +63,7 @@ func main() {
 
 	lg.Info("Server starting on :8080")
 
-	srv := &http.Server{
-		Addr:              ":8080",
-		Handler:           r,
-		ReadHeaderTimeout: readHeaderTimeout,
-	}
-
-	if runErr := r.Run(srv, drainWindow); runErr != nil {
+	if runErr := r.Run(router.NewServer(":8080", r), drainBudget); runErr != nil {
 		lg.Error("Server failed", "error", runErr)
 		os.Exit(1)
 	}

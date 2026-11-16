@@ -11,8 +11,8 @@ Mjolnir is an opinionated wrapper around [go-chi/chi](https://github.com/go-chi/
   - Status code
   - Response body bytes
   - Request latency
-  - Remote address (the transport peer)
-  - Client IP (only when a client-IP resolver has run)
+  - Remote address (the transport peer, never rewritten)
+  - Client IP (when the router resolves one; see Router)
   - The line is written in a `defer`, so it is emitted even when the handler panics
   - Handlers keep the server writer's `http.Flusher`, `http.Hijacker`, and `io.ReaderFrom`, so streaming and `http.NewResponseController` work; `middleware.AsResponseWriter` reuses or adds the same wrapper for your own middleware, and `middleware.ResponseStarted` reports whether the status line has gone out
   - `RequestLoggerWith` takes an injected `*slog.Logger` instead of the `"http"` component logger
@@ -23,14 +23,19 @@ Mjolnir is an opinionated wrapper around [go-chi/chi](https://github.com/go-chi/
   - Adds request ID to response headers
   - Available throughout the request context
 
+- **Router**: one `router.Config`, and a fixed framework stack the app's own middleware runs inside
+  - `r.Use(...)` works after `router.New`, the way chi documents it
+  - Forwarding headers are ignored unless the proxies that set them are configured as trusted (ADR-0007)
+  - `router.NewServer` builds an `http.Server` with slow-client timeouts
+
 - **Health Checks**: Probe endpoints wired by the router itself, with startup and readiness checks required at construction
-  - `/livez`, `/readyz`, and `/startupz`
-  - Automatic drain on SIGINT or SIGTERM, with readiness as the drain signal
+  - `/livez`, `/readyz`, and `/startupz`, for GET and HEAD; the paths are reserved for the framework
+  - Automatic drain on SIGINT or SIGTERM within one time budget, with readiness as the drain signal
 
 - **Standardized Error Handling**: Comprehensive error management system
   - RFC 9457 `application/problem+json` error responses
   - Automatic internal error logging
-  - Panic recovery
+  - Panic recovery: logged through slog with the stack, answered with a 500 problem, or the connection aborted if the response had already started
   - Helper functions for common HTTP status codes
   - Handlers return an `error` carrying an `*httpx.Problem` instead of writing the error response themselves
 
@@ -68,9 +73,11 @@ import (
 func main() {
   lg := log.GetLogger("app")
 
-  r, err := router.New(health.Config{
-    Started: health.AlwaysStarted,
-    Ready:   health.AlwaysReady,
+  r, err := router.New(router.Config{
+    Health: health.Config{
+      Started: health.AlwaysStarted,
+      Ready:   health.AlwaysReady,
+    },
   })
   if err != nil {
     lg.Error("failed to build router", "error", err)
@@ -87,18 +94,63 @@ func main() {
     panic("This is a panic")
   })
 
-  srv := &http.Server{
-    Addr:              ":8080",
-    Handler:           r,
-    ReadHeaderTimeout: 5 * time.Second,
-  }
-
-  if err := r.Run(srv, 10*time.Second); err != nil {
+  if err := r.Run(router.NewServer(":8080", r), 10*time.Second); err != nil {
     lg.Error("server failed", "error", err)
     os.Exit(1)
   }
 }
 ```
+
+### Router
+
+`router.New` takes one `router.Config`:
+
+```go
+r, err := router.New(router.Config{
+  Health:         health.Config{Started: ..., Ready: ...}, // required, see Health Checks
+  TrustedProxies: []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}, // optional
+  AccessLogger:   lg,                                                    // optional; nil is the "http" logger
+})
+```
+
+Every request passes through the framework stack, in this fixed order: request
+ID, client IP, access logging, panic recovery, then HEAD-to-GET routing. Your
+routes and middleware live on an app mux beneath it, so `Use`, `Get`, `Group`,
+`Route`, `With`, `Mount`, `NotFound`, and `MethodNotAllowed` behave as they do
+on any chi router. `r.Use(...)` after `router.New` works. App middleware sees
+the request ID, and a request it rejects or a panic it raises is still
+access-logged.
+
+```go
+r.Use(auth)          // wraps every app route, never the probes
+r.Get("/widgets", ...)
+```
+
+**Client address.** By default the client IP is the transport peer, and
+`X-Forwarded-For`, `X-Real-IP`, and `True-Client-IP` are ignored, so a client
+cannot choose its logged address. Behind load balancers, list their CIDR
+prefixes in `TrustedProxies`. `X-Forwarded-For` is then read right to left past
+the trusted hops, and the first untrusted address is the client; a spoofed
+leftmost entry has no effect. A peer outside every prefix is itself the client.
+The access line always carries `remote_addr` (the peer as the server saw it),
+and `client_ip` when one resolves. Resolution fails closed: an unparsable peer,
+or a garbled `X-Forwarded-For` entry from a trusted one, resolves none. Read it in
+a handler with chi's `middleware.GetClientIP(r.Context())`.
+
+**Panics.** A panic anywhere below the framework stack, including one with
+`http.ErrAbortHandler`, is logged through the access logger with its stack,
+method, path, request ID, and `response_started`. If nothing has been written, the client gets a 500
+problem. If the response had started, the connection is aborted, so a truncated
+body cannot pass for a complete 200.
+
+**Server.** `router.NewServer(addr, r)` returns an `http.Server` with
+`ReadHeaderTimeout` 5s, `ReadTimeout` 30s, `IdleTimeout` 120s, and
+`MaxHeaderBytes` 1 MiB. `WriteTimeout` is left at zero so that streaming
+responses (SSE, long downloads) are not cut off. A handler that needs a write
+deadline can set its own with `http.ResponseController.SetWriteDeadline`.
+
+A Router serves one lifetime: a second `Serve` or `Run` returns
+`router.ErrAlreadyServed`.
 
 ### Health Checks
 
@@ -107,10 +159,10 @@ required: `router.New` returns an error naming the one that is missing, so an
 application cannot start without a health surface.
 
 ```go
-r, err := router.New(health.Config{
+r, err := router.New(router.Config{Health: health.Config{
   Started: health.AlwaysStarted,                   // initialization complete
   Ready:   func(ctx context.Context) bool { ... }, // consulted per probe
-})
+}})
 ```
 
 | Path | Meaning | Behaviour |
@@ -119,8 +171,16 @@ r, err := router.New(health.Config{
 | `/readyz` | the process can serve traffic now | 200/503 from `ReadyFunc`, on every request |
 | `/startupz` | initialization is complete | 200 once `StartedFunc` first returns true, latched |
 
-Responses are 200/503 with an empty body and no content type; other methods get
-405. Probes appear in the request log like any other request.
+Responses are 200/503 with an empty body and no content type. `HEAD` gets the
+same status as `GET`; any other method gets an empty 405, with no `Allow` header. Probes
+appear in the request log like any other request.
+
+The three paths are reserved. App middleware never runs on them, whatever the
+method, so auth or rate limiting cannot fail a probe, and an app route on one
+of them is never reached.
+
+`r.Health()` returns the probe state, so an app can call `r.Health().Drain()`
+to flip readiness to 503 on its own trigger.
 
 `StartedFunc` must never check a dependency. A failing startup probe kills the
 container, which turns an outage into a restart loop — report dependencies from
@@ -131,22 +191,26 @@ container, which turns an outage into a restart loop — report dependencies fro
 `Router.Run` starts the drain on SIGINT or SIGTERM; `Router.Serve` does the same
 when the context you pass is cancelled.
 
+The drain duration is one budget, split in half:
+
 1. `/readyz` answers 503 without consulting `ReadyFunc`.
-2. The server keeps serving for the drain duration, so load balancers stop
+2. For the first half, the server keeps serving, so load balancers stop
    routing to the process.
-3. `Shutdown` runs with the same duration as its deadline, letting in-flight
-   requests finish.
+3. `Shutdown` runs with the second half as its deadline, letting in-flight
+   requests finish. A request still running at the deadline is dropped by
+   `Close`, and `Serve` returns the deadline error.
 
 `/livez` keeps answering 200 throughout: a restart mid-drain would interrupt the
-requests being finished. A second signal skips the rest of the window.
+requests being finished. Under `Run`, a second signal closes the server at any
+point, during the serving half or during `Shutdown`. `Serve` drains on context
+cancellation and has no abort.
 
-The drain duration bounds both the advertise window and the shutdown deadline,
-so the worst case is twice that duration plus whatever the process needs to
-close its own dependencies. A Kubernetes `terminationGracePeriodSeconds` must be
-larger than that: a 10s drain needs at least 20s plus the dependency teardown.
-Kubernetes removes endpoints asynchronously after SIGTERM, so the window also
-has to be long enough for that removal to propagate. A drain of zero closes the
-server immediately instead.
+The whole drain fits inside its duration, so a Kubernetes
+`terminationGracePeriodSeconds` must exceed the drain plus whatever the process
+needs to close its own dependencies: a 10s drain needs more than 10s plus the
+dependency teardown. Kubernetes removes endpoints asynchronously after SIGTERM,
+so the serving half must be long enough for that removal to propagate. A drain
+of zero closes the server immediately instead.
 
 ### HTTP Utility Functions
 

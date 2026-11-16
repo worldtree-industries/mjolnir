@@ -47,7 +47,10 @@ A component that formats and delivers log events to a destination. The framework
 | **Startup** | Initialization complete: the one-time milestone after which the startup probe succeeds; never a dependency check |
 | **Liveness** | The process is running and can accept connections; failure means restart |
 | **Readiness** | The process can serve traffic right now; failure means remove from traffic, never restart |
-| **Drain** | The window between shutdown being requested and the server closing: readiness reports 503, the process keeps serving, then in-flight requests finish |
+| **Drain** | The window between shutdown being requested and the server closing, bounded by one budget: readiness reports 503 and the process keeps serving for the first half, then `Shutdown` lets in-flight requests finish within the second half; anything still running is closed. Under `Run`, a second signal closes the server at any point; `Serve` drains on context cancellation and has no abort (ADR-0005) |
+| **App Mux** | The `*chi.Mux` a `Router` embeds, where the app's routes and middleware live; it is mounted beneath the framework-owned outer mux, so app middleware always runs inside the framework stack and never on a probe path (ADR-0005) |
+| **Framework Stack** | The middleware the router installs in a fixed order on every request: request ID, client IP, access logging, panic recovery, HEAD routing; apps cannot reorder it |
+| **Trusted Proxy** | A reverse proxy whose CIDR prefix is listed in `router.Config.TrustedProxies`; only its `X-Forwarded-For` entries are believed when resolving the client IP. With none listed, the client IP is the transport peer (ADR-0007) |
 | **Release Tag** | A lightweight `vX.Y.Z` tag on a merge commit to `main`; the release itself, since a library publishes no artifacts (ADR-0006) |
 | **Bump** | The requested version step for a merge: `semver:major` or `semver:minor` from the pull request's labels, `patch` otherwise (ADR-0006) |
 | **Version Guard** | The check that the `go.mod` module path's `/vN` suffix matches the major version a bump would publish; blocks merging and runs again before tagging |
@@ -64,6 +67,7 @@ A component that formats and delivers log events to a destination. The framework
 - **Test seam**: `UseOutputForTests` redirects both sinks; documented as for tests only
 - **ADR-0002**: Option[T] redesigned around explicit presence (comma-ok `Get()`), module floor go1.27
 - **Health surface**: `/livez` (constant 200), `/readyz` (flappable `ReadyFunc`), `/startupz` (latched `StartedFunc`); both functions are required at `router.New` — ADR-0005
+- **The router owns its middleware order**: `router.New(router.Config)` builds a framework-owned outer mux (the framework stack plus the reserved probe paths `/livez`, `/readyz`, `/startupz`, served for GET and HEAD) above the app mux; `r.Use` after `New` works, panics are recovered and logged through slog, and the drain fits one budget split between serving and `Shutdown` — ADR-0005
 - **Request identity is default-deny**: an inbound `X-Request-ID` is kept only when it parses as a UUID (length-bounded first) and is canonicalised; no forwarding header is trusted unless trusted CIDR prefixes are configured — ADR-0007
 - **Errors are problems**: handlers return an `error` carrying an `*httpx.Problem` (any other error becomes a 500), sent as RFC 9457 `application/problem+json`; 4xx details are public and never include the cause, 5xx keep their status and code but send a fixed generic detail and log the cause at Error; a started response is never appended to — ADR-0008
 - **Releases happen on merge**: the merge commit to `main` is tagged, bumped by the merged pull request's labels (`patch` by default), and only when the version guard's module-path suffix matches — ADR-0006
