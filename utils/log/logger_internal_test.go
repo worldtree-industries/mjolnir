@@ -9,7 +9,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 )
 
 // These tests exercise the stateful machinery — sink swapping, the level
@@ -186,36 +185,28 @@ func TestConcurrentEmissionAndLevelChange(t *testing.T) {
 	held := c.loggerTo("Racy", &buf)
 	derived := held.With("component", "child")
 
-	const workers = 8
+	// A fixed amount of work, not a time window, so the test does the same
+	// interleaving-prone work on every machine.
+	const (
+		workers    = 8
+		iterations = 2000
+	)
 	var wg sync.WaitGroup
-	stop := make(chan struct{})
 	for range workers {
 		wg.Go(func() {
-			for {
-				select {
-				case <-stop:
-					return
-				default:
-				}
+			for range iterations {
 				held.Info("tick")
 				derived.Debug("child-tick")
 			}
 		})
 	}
 	wg.Go(func() {
-		for {
-			select {
-			case <-stop:
-				return
-			default:
-			}
+		for range iterations {
 			c.setLevel("Racy", slog.LevelDebug)
 			c.setLevel("Racy", slog.LevelInfo)
 		}
 	})
 
-	time.Sleep(100 * time.Millisecond)
-	close(stop)
 	wg.Wait()
 }
 
