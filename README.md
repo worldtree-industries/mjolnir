@@ -28,11 +28,11 @@ Mjolnir is an opinionated wrapper around [go-chi/chi](https://github.com/go-chi/
   - Automatic drain on SIGINT or SIGTERM, with readiness as the drain signal
 
 - **Standardized Error Handling**: Comprehensive error management system
-  - Consistent JSON error responses
+  - RFC 9457 `application/problem+json` error responses
   - Automatic internal error logging
   - Panic recovery
   - Helper functions for common HTTP status codes
-  - Handlers return an `*errorx.APIError` instead of writing the response themselves
+  - Handlers return an `error` carrying an `*httpx.Problem` instead of writing the error response themselves
 
 ## Installation
 
@@ -77,9 +77,11 @@ func main() {
     os.Exit(1)
   }
 
-  r.Get("/", func(w http.ResponseWriter, r *http.Request) {
-    httpx.RespondJSON(w, r, http.StatusOK, map[string]string{"msg": "Hello World!"})
-  })
+  codec := httpx.NewCodec(httpx.DefaultMaxBodyBytes)
+
+  r.Get("/", httpx.Handler(func(w http.ResponseWriter, r *http.Request) error {
+    return codec.Respond(w, r, http.StatusOK, map[string]string{"msg": "Hello World!"})
+  }))
 
   r.Get("/panic", func(w http.ResponseWriter, r *http.Request) {
     panic("This is a panic")
@@ -147,87 +149,98 @@ has to be long enough for that removal to propagate. A drain of zero closes the
 server immediately instead.
 
 ### HTTP Utility Functions
+
+`utils/httpx` is the one place handlers translate to and from HTTP. A
+`Codec` decodes JSON request bodies and writes JSON responses; both return an
+`error` that is a `*httpx.Problem` on failure and `nil` on success:
+
 ```go
 import "github.com/dfryer1193/mjolnir/utils/httpx"
 
-// Respond with JSON
-httpx.RespondJSON(w, r, http.StatusOK, payload)
+codec := httpx.NewCodec(httpx.DefaultMaxBodyBytes) // 1 MiB; httpx.Codec{} is the same
 
-// Decode JSON request body
-var data MyStruct
-if err := httpx.DecodeJSON(r, &data); err != nil {
-// Handle error
-}
-
-// Validate content type
-if !httpx.ValidateContentType(r, "application/json") {
-// Handle invalid content type
-}
+r.Post("/widgets", httpx.Handler(func(w http.ResponseWriter, r *http.Request) error {
+  var in Widget
+  if err := codec.Decode(w, r, &in); err != nil {
+    return err
+  }
+  return codec.Respond(w, r, http.StatusCreated, in)
+}))
 ```
+
+`Decode` accepts `application/json` and any `+json` type (such as
+`application/vnd.api+json`), whatever its parameters, such as `charset`. It
+answers 415 for any other media type, 413 for a value that runs past the limit,
+and 400 for a body that is not a JSON value of the expected shape. It reads the
+first JSON value only and ignores anything after it, as `json.Decoder` does. `Respond` marshals the payload before
+writing anything, so a marshal failure still becomes a clean 500.
 
 ### Error Handling Utilities
 
-Handlers return a `*errorx.APIError` and `errorx.ErrorHandler` writes the
-response. With `github.com/dfryer1193/mjolnir/utils/errorx` imported:
+Handlers wrapped in `httpx.Handler` return an `error`, or `nil` when they
+wrote a response themselves. An error that is or wraps (`%w`) a
+`*httpx.Problem` sends that problem; any other error is sent as
+`httpx.Internal(err)`, a 500 that logs the error as its cause:
 
 ```go
-r.Get("/thing", errorx.ErrorHandler(
-  func(w http.ResponseWriter, r *http.Request) *errorx.APIError {
-    if err := doThing(); err != nil {
-      return errorx.BadRequestErr(err)
-    }
-    return nil
-  }),
-))
+r.Get("/widgets/{id}", httpx.Handler(func(w http.ResponseWriter, r *http.Request) error {
+  widget, err := store.Get(r.Context(), chi.URLParam(r, "id"))
+  switch {
+  case errors.Is(err, store.ErrNotFound):
+    return httpx.NotFound("widget_not_found", "No widget has that id.")
+  case err != nil:
+    return httpx.Internal(err)
+  }
+  return codec.Respond(w, r, http.StatusOK, widget)
+}))
 ```
 
-The helpers are `errorx.BadRequestErr`, `errorx.UnauthorizedErr`, and
-`errorx.InternalServerErr`; `errorx.NewAPIError(err, status)` covers any other
-code.
+The helpers are `BadRequest`, `Unauthorized`, `Forbidden`, `NotFound`,
+`Conflict`, and `UnprocessableEntity` (each takes a code and a public detail,
+and sends the code as given, even an empty one), and `Internal` and
+`ServiceUnavailable` (each takes the cause and sends the code
+`internal_server_error` or `service_unavailable`).
+`httpx.NewProblem(status, code, detail, cause)` covers any other 4xx or 5xx
+status and code; it rejects other statuses, an empty code, and a 5xx without a
+cause. `httpx.HandlerWithLogger` takes the logger to use instead of the
+`httpx` named logger.
 
 ### Error Response Format
 
-Errors reported through `errorx` are returned as JSON with the following
-structure (the health probes are the exception: they answer 200/503 with an
-empty body):
+Problems are sent as RFC 9457 problem documents with the content type
+`application/problem+json` and a `code` extension member (the health probes
+are the exception: they answer 200/503 with an empty body):
 
 ```json
 {
-    "error": "Error message",
-    "code": 400
+    "type": "about:blank",
+    "title": "Not Found",
+    "status": 404,
+    "detail": "No widget has that id.",
+    "instance": "urn:uuid:6f1c2b9e-3d4a-4f5b-8c7d-9e0f1a2b3c4d",
+    "code": "widget_not_found"
 }
 ```
+
+`instance` carries the request id when the `RequestID` middleware ran.
 
 #### Error Handling Behavior
 
-The error handler distinguishes between internal (500-level) and other errors:
-
-- **Internal Server Errors (500+)**:
-  - Logs the full error details to the server logs
-  - Returns a generic "Internal Server Error" body to the client
-  - Includes request ID in logs for correlation
-  - Keeps the status code the handler chose, while the body's `code` is always
-    500 (the mismatch is tracked in #20)
-
-Example internal error response:
-```json
-{
-    "error": "Internal Server Error",
-    "code": 500
-}
-```
-
-- **Other Errors (4xx)**:
-  - Returns the actual error message to the client
-  - Includes the specific status code
-  - Does not log detailed error information
-
-Example client error response:
-```json
-{
-    "error": "Resource not found",
-    "code": 404
-}
-```
+- **Client errors (4xx)**: the response carries the detail the handler wrote
+  for the client and nothing else. A wrapped cause is never sent, and nothing
+  is logged.
+- **Server errors (5xx)**: the status and code stay as the handler chose them
+  (a 503 is sent as 503), but the detail is replaced by the fixed
+  `"The server could not complete the request."`. The handler's detail and the
+  cause are logged at Error with the method, path, request id, status, and
+  code.
+- **A response that already started**: if the handler wrote a status or any
+  body before returning a problem, nothing more is written, so bodies are
+  never concatenated. The problem is logged at Warn instead.
+  `httpx.WriteProblem` reports this case as `httpx.ErrResponseStarted`, but
+  only when its writer is a `middleware.ResponseWriter`: `httpx.Handler`
+  always provides one, while a direct `WriteProblem` call on any other writer
+  writes the problem unconditionally. Wrap with `middleware.AsResponseWriter`
+  first to get the check.
 
 This approach ensures that sensitive internal error details are never exposed to clients while still providing meaningful error messages for client-side issues.
