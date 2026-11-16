@@ -98,7 +98,7 @@ func TestStartupLatches(t *testing.T) {
 // probePaths are the paths the framework reserves.
 func probePaths() []string { return []string{"/livez", "/readyz", "/startupz"} }
 
-func TestProbesRejectMethodsOtherThanGetAndHead(t *testing.T) {
+func TestProbesRejectMethodsOtherThanGetAndHeadWithoutAllow(t *testing.T) {
 	t.Parallel()
 
 	srv := httptest.NewServer(mustNew(t, alwaysHealthy()))
@@ -110,8 +110,11 @@ func TestProbesRejectMethodsOtherThanGetAndHead(t *testing.T) {
 			if resp.status != http.StatusMethodNotAllowed {
 				t.Fatalf("%s %s = %d, want 405", method, path, resp.status)
 			}
-			if got := resp.header.Get("Allow"); got != "GET, HEAD" {
-				t.Fatalf("%s %s: Allow = %q, want \"GET, HEAD\"", method, path, got)
+			if got, ok := resp.header["Allow"]; ok {
+				t.Fatalf("%s %s: Allow = %q, want no Allow header", method, path, got)
+			}
+			if resp.body != "" {
+				t.Fatalf("%s %s: body = %q, want empty", method, path, resp.body)
 			}
 		}
 	}
@@ -409,6 +412,33 @@ func TestPanicBeforeAWriteIsA500Problem(t *testing.T) {
 	}
 
 	logs.waitFor(t, `msg="request completed"`, "path=/boom", "status=500")
+}
+
+func TestErrAbortHandlerBeforeAWriteIsLoggedAndA500Problem(t *testing.T) {
+	t.Parallel()
+
+	logs := &logSink{}
+	r := mustNewWith(t, router.Config{Health: alwaysHealthy(), AccessLogger: logs.logger()})
+
+	r.Get("/abort", func(http.ResponseWriter, *http.Request) {
+		panic(http.ErrAbortHandler)
+	})
+
+	srv := httptest.NewServer(r)
+	t.Cleanup(srv.Close)
+
+	resp := get(t, srv.URL+"/abort")
+	if resp.status != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", resp.status)
+	}
+	if !strings.Contains(resp.body, `"code":"internal_server_error"`) {
+		t.Fatalf("body = %s, want an internal_server_error problem", resp.body)
+	}
+
+	panicLine := logs.waitFor(t, `msg="panic recovered"`, "path=/abort")
+	if !strings.Contains(panicLine, "stack=") {
+		t.Fatalf("panic line has no stack: %q", panicLine)
+	}
 }
 
 func TestPanicInAppMiddlewareIsRecoveredAndAccessLogged(t *testing.T) {

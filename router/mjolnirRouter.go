@@ -61,7 +61,8 @@ type Config struct {
 //
 // The startup and readiness functions in cfg.Health are required: New returns
 // an error when either is missing, so an application cannot start without a
-// health surface. It also rejects an invalid trusted proxy prefix.
+// health surface. It also rejects an invalid trusted proxy prefix, as #33
+// specifies, since chi would panic on one.
 //
 // Every request passes through a fixed framework stack before it reaches the
 // app: request ID, client IP, access logging, panic recovery, then HEAD
@@ -69,8 +70,9 @@ type Config struct {
 // stack, so it sees the request ID, and its panics and rejections are logged.
 //
 // The router answers /livez, /readyz, and /startupz itself, for GET and HEAD,
-// and with 405 for any other method. These paths are reserved: app
-// middleware never runs on them, and an app route on one is never reached.
+// and with an empty 405, without an Allow header, for any other method.
+// These paths are reserved: app middleware never runs on them, and an app
+// route on one is never reached.
 //
 // Logging is configured by the application (utils/log); the router does not
 // set up a logger.
@@ -134,11 +136,10 @@ func clientIPMiddleware(trusted []netip.Prefix) (func(http.Handler) http.Handler
 }
 
 // probe serves GET and HEAD with h and answers every other method with an
-// empty 405.
+// empty 405 that carries no Allow header.
 func probe(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
-			w.Header().Set("Allow", "GET, HEAD")
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
 		}
