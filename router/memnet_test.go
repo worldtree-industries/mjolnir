@@ -86,7 +86,7 @@ func (l *MemListener) DialContext(ctx context.Context, _, _ string) (net.Conn, e
 func (l *MemListener) Status(t testing.TB, path string) int {
 	t.Helper()
 
-	resp, err := l.get(path)
+	resp, err := l.get(t.Context(), path)
 	if err != nil {
 		return 0
 	}
@@ -110,7 +110,7 @@ func (l *MemListener) StartStuck(t testing.TB, r *Router) <-chan error {
 	errCh := make(chan error, 1)
 
 	go func() {
-		resp, err := l.get("/stuck")
+		resp, err := l.get(t.Context(), "/stuck")
 		if err == nil {
 			_ = resp.Body.Close()
 		}
@@ -122,8 +122,8 @@ func (l *MemListener) StartStuck(t testing.TB, r *Router) <-chan error {
 	return errCh
 }
 
-func (l *MemListener) get(path string) (*http.Response, error) {
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://mem"+path, nil)
+func (l *MemListener) get(ctx context.Context, path string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://mem"+path, nil)
 	if err != nil {
 		return nil, err
 	}

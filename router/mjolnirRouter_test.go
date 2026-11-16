@@ -450,7 +450,7 @@ func TestPanicAfterAWriteAbortsTheConnection(t *testing.T) {
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)
 
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, srv.URL+"/partial", nil)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/partial", nil)
 	if err != nil {
 		t.Fatalf("new request: %v", err)
 	}

@@ -73,7 +73,7 @@ func TestServeListenerServesOnTheCallersListenerUntilTheContextIsDone(t *testing
 	ln := listenLoopback(t)
 	srv := &http.Server{Handler: r, ReadHeaderTimeout: time.Second}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	errCh := make(chan error, 1)
 
 	go func() { errCh <- r.ServeListener(ctx, ln, srv, 0) }()
@@ -234,7 +234,7 @@ func TestServeListenerReturnsServerErrors(t *testing.T) {
 	boom := errors.New("accept failed")
 	srv := &http.Server{Handler: r, ReadHeaderTimeout: time.Second}
 
-	err := r.ServeListener(context.Background(), failingListener{err: boom}, srv, 0)
+	err := r.ServeListener(t.Context(), failingListener{err: boom}, srv, 0)
 	if !errors.Is(err, boom) {
 		t.Fatalf("ServeListener = %v, want the accept error", err)
 	}
@@ -258,7 +258,7 @@ func TestEveryWayOfServingReturnsErrAlreadyServedTheSecondTime(t *testing.T) {
 
 			r := mustNew(t, alwaysHealthy())
 
-			ctx, cancel := context.WithCancel(context.Background())
+			ctx, cancel := context.WithCancel(t.Context())
 			cancel()
 
 			if err := serve(r, ctx); err != nil {
@@ -272,7 +272,7 @@ func TestEveryWayOfServingReturnsErrAlreadyServedTheSecondTime(t *testing.T) {
 
 			second := &http.Server{Addr: taken.Addr().String(), Handler: r, ReadHeaderTimeout: time.Second}
 
-			if err := r.Serve(context.Background(), second, 0); !errors.Is(err, router.ErrAlreadyServed) {
+			if err := r.Serve(t.Context(), second, 0); !errors.Is(err, router.ErrAlreadyServed) {
 				t.Fatalf("Serve = %v, want ErrAlreadyServed", err)
 			}
 			if err := r.Run(second, 0); !errors.Is(err, router.ErrAlreadyServed) {
@@ -280,7 +280,7 @@ func TestEveryWayOfServingReturnsErrAlreadyServedTheSecondTime(t *testing.T) {
 			}
 
 			ln := router.NewMemListener()
-			if err := r.ServeListener(context.Background(), ln, second, 0); !errors.Is(err, router.ErrAlreadyServed) {
+			if err := r.ServeListener(t.Context(), ln, second, 0); !errors.Is(err, router.ErrAlreadyServed) {
 				t.Fatalf("ServeListener = %v, want ErrAlreadyServed", err)
 			}
 
@@ -299,7 +299,7 @@ func TestServeListensOnTheServerAddress(t *testing.T) {
 
 	r := mustNew(t, alwaysHealthy())
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	addr := make(chan net.Addr, 1)
@@ -310,6 +310,8 @@ func TestServeListensOnTheServerAddress(t *testing.T) {
 		// http.Server hands BaseContext the listener Serve opened.
 		BaseContext: func(ln net.Listener) context.Context {
 			addr <- ln.Addr()
+			// net/http's own default: the server, not the test, ends
+			// its requests.
 			return context.Background()
 		},
 	}
@@ -346,11 +348,48 @@ func TestServeReturnsTheListenErrorForAnAddressInUse(t *testing.T) {
 	r := mustNew(t, alwaysHealthy())
 	srv := &http.Server{Addr: taken.Addr().String(), Handler: r, ReadHeaderTimeout: time.Second}
 
-	err := r.Serve(context.Background(), srv, 0)
+	err := r.Serve(t.Context(), srv, 0)
 
 	var opErr *net.OpError
 	if !errors.As(err, &opErr) || opErr.Op != "listen" {
 		t.Fatalf("Serve = %v, want the listen error", err)
+	}
+}
+
+// TestServingCanRetryAfterAFailedListen: a listen failure in Serve or Run
+// leaves the Router unserved, so a retry on a free address serves.
+func TestServingCanRetryAfterAFailedListen(t *testing.T) {
+	t.Parallel()
+
+	failing := map[string]func(context.Context, *router.Router, *http.Server) error{
+		"Serve": func(ctx context.Context, r *router.Router, srv *http.Server) error { return r.Serve(ctx, srv, 0) },
+		"Run":   func(_ context.Context, r *router.Router, srv *http.Server) error { return r.Run(srv, 0) },
+	}
+
+	for name, serve := range failing {
+		t.Run("after "+name, func(t *testing.T) {
+			t.Parallel()
+
+			taken := listenLoopback(t)
+			t.Cleanup(func() { _ = taken.Close() })
+
+			r := mustNew(t, alwaysHealthy())
+
+			busy := &http.Server{Addr: taken.Addr().String(), Handler: r, ReadHeaderTimeout: time.Second}
+
+			var opErr *net.OpError
+			if err := serve(t.Context(), r, busy); !errors.As(err, &opErr) || opErr.Op != "listen" {
+				t.Fatalf("%s on a taken address = %v, want the listen error", name, err)
+			}
+
+			ctx, cancel := context.WithCancel(t.Context())
+			cancel()
+
+			free := &http.Server{Addr: "127.0.0.1:0", Handler: r, ReadHeaderTimeout: time.Second}
+			if err := r.Serve(ctx, free, 0); err != nil {
+				t.Fatalf("Serve after a failed listen = %v, want nil", err)
+			}
+		})
 	}
 }
 
@@ -394,7 +433,7 @@ func startMem(t *testing.T, cfg health.Config, drain time.Duration) *memServer {
 	r := mustNew(t, cfg)
 	ln := router.NewMemListener()
 	srv := &http.Server{Handler: r, ReadHeaderTimeout: time.Second}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 
 	s := &memServer{r: r, ln: ln, cancel: cancel, errCh: make(chan error, 1)}
 

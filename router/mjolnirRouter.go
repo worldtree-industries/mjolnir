@@ -34,11 +34,12 @@ type Router struct {
 
 	outer  *chi.Mux
 	health *health.Health
-	served atomic.Bool
+	served atomic.Bool // claimed by the first serving call; a failed listen releases it
 }
 
-// ErrAlreadyServed is returned by a second Serve, ServeListener or Run: a
-// Router serves one lifetime.
+// ErrAlreadyServed is returned by a second Serve, ServeListener or Run, in
+// any combination: a Router serves one lifetime. A Serve or Run whose listen
+// failed does not count.
 var ErrAlreadyServed = errors.New("router: already served")
 
 // Config configures a Router.
@@ -162,7 +163,8 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 
 // Serve listens on srv.Addr (":http" when empty) and serves srv there like
 // [Router.ServeListener]. A listen failure, such as an address in use, is
-// returned before any drain starts.
+// returned before any drain starts, and does not use up the Router's
+// lifetime: a later Serve, ServeListener or Run may try again.
 func (r *Router) Serve(ctx context.Context, srv *http.Server, drain time.Duration) error {
 	if !r.served.CompareAndSwap(false, true) {
 		return ErrAlreadyServed
@@ -170,6 +172,7 @@ func (r *Router) Serve(ctx context.Context, srv *http.Server, drain time.Duratio
 
 	ln, err := listen(ctx, srv)
 	if err != nil {
+		r.served.Store(false)
 		return err
 	}
 
@@ -190,7 +193,8 @@ func (r *Router) Serve(ctx context.Context, srv *http.Server, drain time.Duratio
 //
 // A Router serves one lifetime: once drained, readiness stays 503, and a
 // second Serve, ServeListener or Run returns [ErrAlreadyServed] without
-// touching srv.
+// touching srv. Only a Serve or Run whose listen failed gives the lifetime
+// back. ServeListener has no second-signal abort; cancel ctx to drain.
 //
 // ServeListener returns an error if the server fails or the shutdown deadline
 // is exceeded. It never calls [os.Exit].
@@ -209,7 +213,8 @@ const signalQueue = 2
 
 // Run listens and serves srv like Serve, starting the drain on SIGINT or
 // SIGTERM. A second signal closes the server at any point in the drain,
-// whether it is still serving or already in Shutdown.
+// whether it is still serving or already in Shutdown; only Run has this
+// abort. As with Serve, a listen failure leaves the Router servable.
 func (r *Router) Run(srv *http.Server, drain time.Duration) error {
 	if !r.served.CompareAndSwap(false, true) {
 		return ErrAlreadyServed
@@ -223,6 +228,7 @@ func (r *Router) Run(srv *http.Server, drain time.Duration) error {
 
 	ln, err := listen(ctx, srv)
 	if err != nil {
+		r.served.Store(false)
 		return err
 	}
 

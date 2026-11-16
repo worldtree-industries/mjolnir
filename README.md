@@ -150,7 +150,8 @@ responses (SSE, long downloads) are not cut off. A handler that needs a write
 deadline can set its own with `http.ResponseController.SetWriteDeadline`.
 
 A Router serves one lifetime: a second `Serve`, `ServeListener` or `Run`
-returns `router.ErrAlreadyServed`.
+returns `router.ErrAlreadyServed`. A `Serve` or `Run` whose listen failed does
+not use it up, so a retry after "address in use" works.
 
 ### Health Checks
 
@@ -191,7 +192,7 @@ container, which turns an outage into a restart loop — report dependencies fro
 `Router.Run` starts the drain on SIGINT or SIGTERM; `Router.Serve` does the same
 when the context you pass is cancelled. Both listen on `srv.Addr` (`:http` when
 empty), and a listen failure, such as an address in use, is returned before any
-drain starts.
+drain starts and leaves the Router free to try again.
 
 `Router.ServeListener(ctx, ln, srv, drain)` serves on a listener you already
 hold instead (socket activation, a pre-bound port, an in-memory listener in
@@ -214,8 +215,10 @@ The drain duration is one budget, split in half:
    `Close`, and `Serve` or `ServeListener` returns the deadline error.
 
 `/livez` keeps answering 200 throughout: a restart mid-drain would interrupt the
-requests being finished. A second signal closes the server at any point, during
-the serving half or during `Shutdown`.
+requests being finished. Under `Run`, a second signal closes the server at any
+point, during the serving half or during `Shutdown`. `Serve` and
+`ServeListener` drain on context cancellation and have no abort: the drain
+always runs to its budget.
 
 The whole drain fits inside its duration, so a Kubernetes
 `terminationGracePeriodSeconds` must exceed the drain plus whatever the process

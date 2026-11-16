@@ -31,7 +31,7 @@ func startSignals(t *testing.T, drain time.Duration) *signalRun {
 
 	ln := NewMemListener()
 	srv := &http.Server{Handler: r, ReadHeaderTimeout: time.Second}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 
 	s := &signalRun{
 		r:       r,

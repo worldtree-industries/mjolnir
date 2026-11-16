@@ -2,7 +2,6 @@ package router_test
 
 import (
 	"bytes"
-	"context"
 	"io"
 	"log/slog"
 	"maps"
@@ -122,7 +121,7 @@ type response struct {
 func do(t *testing.T, method, url string, header http.Header) response {
 	t.Helper()
 
-	req, err := http.NewRequestWithContext(context.Background(), method, url, nil)
+	req, err := http.NewRequestWithContext(t.Context(), method, url, nil)
 	if err != nil {
 		t.Fatalf("new request: %v", err)
 	}
