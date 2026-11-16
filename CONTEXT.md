@@ -33,7 +33,7 @@ A component that formats and delivers log events to a destination. The framework
 | **Default Level** | The level used by a name that has none of its own; `SetDefaultLevel` changes it for all such names |
 | **Source** | The line of code (file and line) that emitted a log event |
 | **Context** | The Go `context.Context`: a carrier for request-scoped metadata such as the request id |
-| **Request ID** | An identifier for one HTTP request, set by the RequestID middleware on the context and echoed in the `X-Request-ID` header; the HTTP layer attaches it to request log lines |
+| **Request ID** | An identifier for one HTTP request: always a canonical UUID, either an inbound `X-Request-ID` that parses as one or a generated v4. Set by the RequestID middleware on the context and echoed in the `X-Request-ID` header; the HTTP layer attaches it to request log lines (ADR-0007) |
 | **JSON Stream** | The machine-readable stream, written to a file for Victorialogs/Grafana |
 | **Text Stream** | The human-readable stream, written to stdout for CLI/kubectl |
 | **Option** | A container for a value that may be absent |
@@ -60,4 +60,5 @@ A component that formats and delivers log events to a destination. The framework
 - **Test seam**: `UseOutputForTests` redirects both sinks; documented as for tests only
 - **ADR-0002**: Option[T] redesigned around explicit presence (comma-ok `Get()`), module floor go1.27
 - **Health surface**: `/livez` (constant 200), `/readyz` (flappable `ReadyFunc`), `/startupz` (latched `StartedFunc`); both functions are required at `router.New` — ADR-0005
+- **Request identity is default-deny**: an inbound `X-Request-ID` is kept only when it parses as a UUID (length-bounded first) and is canonicalised; no forwarding header is trusted unless trusted CIDR prefixes are configured — ADR-0007
 - **Releases happen on merge**: the merge commit to `main` is tagged, bumped by the merged pull request's labels (`patch` by default), and only when the version guard's module-path suffix matches — ADR-0006

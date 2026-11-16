@@ -1,146 +1,133 @@
-package middleware
+package middleware_test
 
 import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+
+	"github.com/google/uuid"
+
+	"github.com/dfryer1193/mjolnir/middleware"
 )
 
-func TestRequestID(t *testing.T) {
+const canonicalID = "6ba7b810-9dad-41d1-80b4-00c04fd430c8"
+
+// serveRequestID runs one request through RequestID and returns the echoed
+// header and the id the next handler saw on its context.
+func serveRequestID(t *testing.T, inbound string, set bool) (string, string) {
+	t.Helper()
+	var fromCtx string
+	handler := middleware.RequestID(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		fromCtx = middleware.GetRequestID(r.Context())
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	if set {
+		req.Header.Set("X-Request-ID", inbound)
+	}
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	return rr.Header().Get("X-Request-ID"), fromCtx
+}
+
+// TestRequestIDAcceptsCanonicalUUIDs: every spelling [uuid.Parse] understands
+// is accepted and echoed in its canonical lowercase hyphenated form.
+func TestRequestIDAcceptsCanonicalUUIDs(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		name            string
-		existingReqID   string
-		wantHeaderMatch bool
+		name    string
+		inbound string
 	}{
-		{
-			name:            "no existing request ID",
-			existingReqID:   "",
-			wantHeaderMatch: true,
-		},
-		{
-			name:            "existing request ID",
-			existingReqID:   "test-request-id-123",
-			wantHeaderMatch: true,
-		},
+		{name: "canonical", inbound: canonicalID},
+		{name: "uppercase", inbound: strings.ToUpper(canonicalID)},
+		{name: "urn", inbound: "urn:uuid:" + canonicalID},
+		{name: "braces", inbound: "{" + canonicalID + "}"},
+		{name: "32 hex", inbound: strings.ReplaceAll(canonicalID, "-", "")},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Create a mock handler to verify the context
-			var capturedReqID string
-			nextHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				capturedReqID = GetRequestID(r.Context())
-			})
-
-			// Create the middleware handler
-			handler := RequestID(nextHandler)
-
-			// Create test request
-			req := httptest.NewRequest(http.MethodGet, "/", nil)
-			if tt.existingReqID != "" {
-				req.Header.Set("X-Request-ID", tt.existingReqID)
+			t.Parallel()
+			header, fromCtx := serveRequestID(t, tt.inbound, true)
+			if header != canonicalID {
+				t.Errorf("X-Request-ID = %q, want %q", header, canonicalID)
 			}
-
-			// Create response recorder
-			rr := httptest.NewRecorder()
-
-			// Execute request
-			handler.ServeHTTP(rr, req)
-
-			// Get response headers
-			respID := rr.Header().Get("X-Request-ID")
-
-			// Verify response header exists
-			if respID == "" {
-				t.Error("X-Request-ID header not set in response")
-			}
-
-			// Verify request ID was added to context
-			if capturedReqID == "" {
-				t.Error("request ID not found in context")
-			}
-
-			// Verify header matches context value
-			if capturedReqID != respID {
-				t.Errorf("context request ID (%s) doesn't match header value (%s)",
-					capturedReqID, respID)
-			}
-
-			// If we provided a request ID, verify it was preserved
-			if tt.existingReqID != "" && respID != tt.existingReqID {
-				t.Errorf("expected request ID %s, got %s", tt.existingReqID, respID)
-			}
-
-			// Verify UUID format when no request ID was provided
-			if tt.existingReqID == "" {
-				if len(respID) != 36 { // UUID v4 length
-					t.Errorf("generated request ID %s is not a valid UUID", respID)
-				}
+			if fromCtx != canonicalID {
+				t.Errorf("GetRequestID = %q, want %q", fromCtx, canonicalID)
 			}
 		})
 	}
 }
 
-func TestGetRequestID(t *testing.T) {
+// TestRequestIDReplacesInvalidValues: anything that is not a UUID, including
+// a value too long to be one, is replaced by a fresh v4 UUID and never echoed.
+func TestRequestIDReplacesInvalidValues(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		name     string
-		ctx      context.Context
-		expected string
+		name    string
+		inbound string
+		set     bool
 	}{
-		{
-			name:     "context with request ID",
-			ctx:      context.WithValue(context.Background(), requestIDKey, "test-id"),
-			expected: "test-id",
-		},
-		{
-			name:     "context without request ID",
-			ctx:      context.Background(),
-			expected: "",
-		},
-		{
-			name:     "context with wrong type",
-			ctx:      context.WithValue(context.Background(), requestIDKey, 123),
-			expected: "",
-		},
+		{name: "absent", set: false},
+		{name: "empty", inbound: "", set: true},
+		{name: "non-UUID", inbound: "req-abc-123", set: true},
+		{name: "malformed hex", inbound: "6ba7b810-9dad-41d1-80b4-00c04fd430cz", set: true},
+		{name: "truncated", inbound: canonicalID[:35], set: true},
+		{name: "4 KB", inbound: strings.Repeat("a", 4096), set: true},
+		{name: "4 KB after a valid UUID", inbound: canonicalID + strings.Repeat("0", 4096-len(canonicalID)), set: true},
+		{name: "wrong prefix", inbound: "urn:uid:" + canonicalID + "0", set: true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := GetRequestID(tt.ctx)
-			if got != tt.expected {
-				t.Errorf("GetRequestID() = %v, want %v", got, tt.expected)
+			t.Parallel()
+			header, fromCtx := serveRequestID(t, tt.inbound, tt.set)
+			if header == tt.inbound || header == canonicalID {
+				t.Fatalf("X-Request-ID echoed the inbound value %q", header)
+			}
+			assertGeneratedV4(t, header)
+			if fromCtx != header {
+				t.Errorf("GetRequestID = %q, want the echoed %q", fromCtx, header)
 			}
 		})
 	}
 }
 
-func TestGenerateRequestID(t *testing.T) {
+// TestRequestIDGeneratesDistinctIDs: two requests without an id get different ones.
+func TestRequestIDGeneratesDistinctIDs(t *testing.T) {
 	t.Parallel()
-	// Test multiple generations to ensure uniqueness
-	ids := make(map[string]bool)
-	iterations := 1000
+	first, _ := serveRequestID(t, "", false)
+	second, _ := serveRequestID(t, "", false)
+	if first == second {
+		t.Errorf("two requests shared the generated id %q", first)
+	}
+}
 
-	for range iterations {
-		id := generateRequestID()
+func TestGetRequestIDWithoutMiddleware(t *testing.T) {
+	t.Parallel()
+	if got := middleware.GetRequestID(context.Background()); got != "" {
+		t.Errorf("GetRequestID = %q, want empty", got)
+	}
+}
 
-		// Verify UUID length
-		if len(id) != 36 {
-			t.Errorf("generated ID length = %d, want 36", len(id))
-		}
-
-		// Verify uniqueness
-		if ids[id] {
-			t.Errorf("duplicate ID generated: %s", id)
-		}
-		ids[id] = true
+func assertGeneratedV4(t *testing.T, id string) {
+	t.Helper()
+	parsed, err := uuid.Parse(id)
+	if err != nil {
+		t.Fatalf("generated id %q is not a UUID: %v", id, err)
+	}
+	if parsed.String() != id {
+		t.Errorf("generated id %q is not canonical", id)
+	}
+	if parsed.Version() != 4 || parsed.Variant() != uuid.RFC4122 {
+		t.Errorf("generated id %q is version %d variant %v, want v4 RFC 4122", id, parsed.Version(), parsed.Variant())
 	}
 }
 
 func BenchmarkRequestIDMiddleware(b *testing.B) {
-	handler := RequestID(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	handler := middleware.RequestID(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rr := httptest.NewRecorder()
 
@@ -151,9 +138,9 @@ func BenchmarkRequestIDMiddleware(b *testing.B) {
 }
 
 func BenchmarkRequestIDMiddlewareWithExisting(b *testing.B) {
-	handler := RequestID(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	handler := middleware.RequestID(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.Header.Set("X-Request-ID", "test-request-id")
+	req.Header.Set("X-Request-ID", canonicalID)
 	rr := httptest.NewRecorder()
 
 	b.ResetTimer()

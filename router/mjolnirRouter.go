@@ -42,7 +42,7 @@ func New(cfg health.Config) (*Router, error) {
 	r := chi.NewRouter()
 
 	// Add default chi middleware
-	r.Use(middleware.RealIP)
+	r.Use(middleware.RealIP) //nolint:staticcheck // deprecated for spoofing; #33 removes it
 	r.Use(middleware.Recoverer)
 
 	r.Use(enhancedmiddleware.RequestID)
