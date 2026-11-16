@@ -4,15 +4,12 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"strings"
 	"sync/atomic"
-	"syscall"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/dfryer1193/mjolnir/health"
@@ -68,50 +65,272 @@ func TestNewServerSetsSafeTimeoutsAndAllowsStreaming(t *testing.T) {
 	}
 }
 
-func TestASecondServeReturnsErrAlreadyServed(t *testing.T) {
+func TestServeListenerServesOnTheCallersListenerUntilTheContextIsDone(t *testing.T) {
 	t.Parallel()
 
-	r, srv, base := startServer(t, alwaysHealthy())
+	r := mustNew(t, alwaysHealthy())
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ln := listenLoopback(t)
+	srv := &http.Server{Handler: r, ReadHeaderTimeout: time.Second}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	errCh := make(chan error, 1)
+
+	go func() { errCh <- r.ServeListener(ctx, ln, srv, 0) }()
+
+	if got := get(t, "http://"+ln.Addr().String()+"/livez").status; got != http.StatusOK {
+		t.Fatalf("livez = %d, want 200", got)
+	}
+
+	cancel()
+
+	if err := waitForServe(t, errCh); err != nil {
+		t.Fatalf("ServeListener: %v", err)
+	}
+}
+
+func TestServeListenerAnswersReadinessWith503ForTheWaitWindow(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		var readyCalls atomic.Int32
+
+		s := startMem(t, health.Config{
+			Started: health.AlwaysStarted,
+			Ready: func(context.Context) bool {
+				readyCalls.Add(1)
+				return true
+			},
+		}, 10*time.Second)
+
+		if got := s.ln.Status(t, "/readyz"); got != http.StatusOK {
+			t.Fatalf("readyz before the drain = %d, want 200", got)
+		}
+
+		callsBeforeDrain := readyCalls.Load()
+		start := time.Now()
+
+		s.cancel()
+		synctest.Wait()
+
+		// The wait is the first half of the budget. Readiness is 503 for all
+		// of it, without consulting the check, and the server keeps serving.
+		for _, at := range []time.Duration{0, 5*time.Second - time.Nanosecond} {
+			synctest.Sleep(at - time.Since(start))
+
+			if got := s.ln.Status(t, "/readyz"); got != http.StatusServiceUnavailable {
+				t.Fatalf("readyz %s into the drain = %d, want 503", at, got)
+			}
+			if got := s.ln.Status(t, "/livez"); got != http.StatusOK {
+				t.Fatalf("livez %s into the drain = %d, want 200", at, got)
+			}
+		}
+
+		if got := readyCalls.Load(); got != callsBeforeDrain {
+			t.Fatalf("ReadyFunc called %d times while draining, want 0", got-callsBeforeDrain)
+		}
+
+		// With nothing in flight, Shutdown returns as soon as the wait ends.
+		if err := <-s.errCh; err != nil {
+			t.Fatalf("ServeListener: %v", err)
+		}
+		if elapsed := time.Since(start); elapsed != 5*time.Second {
+			t.Fatalf("ServeListener returned %s into the drain, want 5s", elapsed)
+		}
+
+		// The server owned the listener and closed it.
+		select {
+		case <-s.ln.Closed():
+		default:
+			t.Fatal("the listener is still open")
+		}
+	})
+}
+
+func TestServeListenerFinishesInFlightRequests(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		s := startMem(t, alwaysHealthy(), 10*time.Second)
+
+		s.r.Get("/slow", func(w http.ResponseWriter, _ *http.Request) {
+			<-time.After(time.Second)
+			w.WriteHeader(http.StatusOK)
+		})
+
+		slow := make(chan int, 1)
+
+		go func() { slow <- s.ln.Status(t, "/slow") }()
+
+		synctest.Wait()
+		s.cancel()
+
+		if got := <-slow; got != http.StatusOK {
+			t.Fatalf("in-flight request = %d, want 200", got)
+		}
+		if err := <-s.errCh; err != nil {
+			t.Fatalf("ServeListener: %v", err)
+		}
+	})
+}
+
+func TestServeListenerClosesStragglersWithinTheDrainBudget(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		const drain = 10 * time.Second
+
+		s := startMem(t, alwaysHealthy(), drain)
+		stuck := s.ln.StartStuck(t, s.r)
+
+		start := time.Now()
+		s.cancel()
+
+		err := <-s.errCh
+
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("ServeListener = %v, want the missed shutdown deadline", err)
+		}
+		if elapsed := time.Since(start); elapsed != drain {
+			t.Fatalf("ServeListener took %s, want exactly the %s budget", elapsed, drain)
+		}
+		if reqErr := <-stuck; reqErr == nil {
+			t.Fatal("the stuck request completed; want its connection closed")
+		}
+	})
+}
+
+func TestServeListenerWithZeroDrainClosesImmediately(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		s := startMem(t, alwaysHealthy(), 0)
+		stuck := s.ln.StartStuck(t, s.r)
+
+		start := time.Now()
+		s.cancel()
+
+		// The shutdown deadline is zero: the server closes rather than
+		// reporting a deadline it never had time to meet.
+		if err := <-s.errCh; err != nil {
+			t.Fatalf("ServeListener: %v", err)
+		}
+		if elapsed := time.Since(start); elapsed != 0 {
+			t.Fatalf("ServeListener took %s, want no time at all", elapsed)
+		}
+		if reqErr := <-stuck; reqErr == nil {
+			t.Fatal("the in-flight request completed; want its connection closed")
+		}
+		if got := s.ln.Status(t, "/livez"); got != 0 {
+			t.Fatalf("server still answering after the drain with %d", got)
+		}
+	})
+}
+
+func TestServeListenerReturnsServerErrors(t *testing.T) {
+	t.Parallel()
+
+	r := mustNew(t, alwaysHealthy())
+	boom := errors.New("accept failed")
+	srv := &http.Server{Handler: r, ReadHeaderTimeout: time.Second}
+
+	err := r.ServeListener(t.Context(), failingListener{err: boom}, srv, 0)
+	if !errors.Is(err, boom) {
+		t.Fatalf("ServeListener = %v, want the accept error", err)
+	}
+}
+
+func TestEveryWayOfServingReturnsErrAlreadyServedTheSecondTime(t *testing.T) {
+	t.Parallel()
+
+	first := map[string]func(*router.Router, context.Context) error{
+		"Serve": func(r *router.Router, ctx context.Context) error {
+			return r.Serve(ctx, &http.Server{Addr: "127.0.0.1:0", Handler: r, ReadHeaderTimeout: time.Second}, 0)
+		},
+		"ServeListener": func(r *router.Router, ctx context.Context) error {
+			return r.ServeListener(ctx, router.NewMemListener(), &http.Server{Handler: r}, 0)
+		},
+	}
+
+	for name, serve := range first {
+		t.Run("after "+name, func(t *testing.T) {
+			t.Parallel()
+
+			r := mustNew(t, alwaysHealthy())
+
+			ctx, cancel := context.WithCancel(t.Context())
+			cancel()
+
+			if err := serve(r, ctx); err != nil {
+				t.Fatalf("first %s: %v", name, err)
+			}
+
+			// The address would be in use, so a second Serve or Run that
+			// listened would fail with a listen error instead.
+			taken := listenLoopback(t)
+			t.Cleanup(func() { _ = taken.Close() })
+
+			second := &http.Server{Addr: taken.Addr().String(), Handler: r, ReadHeaderTimeout: time.Second}
+
+			if err := r.Serve(t.Context(), second, 0); !errors.Is(err, router.ErrAlreadyServed) {
+				t.Fatalf("Serve = %v, want ErrAlreadyServed", err)
+			}
+			if err := r.Run(second, 0); !errors.Is(err, router.ErrAlreadyServed) {
+				t.Fatalf("Run = %v, want ErrAlreadyServed", err)
+			}
+
+			ln := router.NewMemListener()
+			if err := r.ServeListener(t.Context(), ln, second, 0); !errors.Is(err, router.ErrAlreadyServed) {
+				t.Fatalf("ServeListener = %v, want ErrAlreadyServed", err)
+			}
+
+			// ServeListener owns its listener even when it refuses to serve.
+			select {
+			case <-ln.Closed():
+			default:
+				t.Fatal("ServeListener left the refused listener open")
+			}
+		})
+	}
+}
+
+func TestServeListensOnTheServerAddress(t *testing.T) {
+	t.Parallel()
+
+	r := mustNew(t, alwaysHealthy())
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	addr := make(chan net.Addr, 1)
+	srv := &http.Server{
+		Addr:              "127.0.0.1:0",
+		Handler:           r,
+		ReadHeaderTimeout: time.Second,
+		// http.Server hands BaseContext the listener Serve opened.
+		BaseContext: func(ln net.Listener) context.Context {
+			addr <- ln.Addr()
+			// net/http's own default: the server, not the test, ends
+			// its requests.
+			return context.Background()
+		},
+	}
+
 	errCh := make(chan error, 1)
 
 	go func() { errCh <- r.Serve(ctx, srv, 0) }()
 
-	waitForStatus(t, base+"/livez", http.StatusOK)
-	cancel()
-
-	if err := waitForServe(t, errCh); err != nil {
-		t.Fatalf("first Serve: %v", err)
+	var base string
+	select {
+	case a := <-addr:
+		base = "http://" + a.String()
+	case err := <-errCh:
+		t.Fatalf("Serve returned before listening: %v", err)
 	}
 
-	second := &http.Server{Addr: freeAddr(t), Handler: r, ReadHeaderTimeout: time.Second}
-	t.Cleanup(func() { _ = second.Close() })
-
-	if err := r.Serve(context.Background(), second, 0); !errors.Is(err, router.ErrAlreadyServed) {
-		t.Fatalf("second Serve = %v, want ErrAlreadyServed", err)
+	if got := get(t, base+"/livez").status; got != http.StatusOK {
+		t.Fatalf("livez = %d, want 200", got)
 	}
-	if err := r.Run(second, 0); !errors.Is(err, router.ErrAlreadyServed) {
-		t.Fatalf("Run after Serve = %v, want ErrAlreadyServed", err)
-	}
-	if code := statusOf(t, "http://"+second.Addr+"/livez"); code != 0 {
-		t.Fatalf("the second server was started and answered %d", code)
-	}
-}
-
-func TestServeServesUntilContextIsCancelled(t *testing.T) {
-	r, srv, base := startServer(t, health.Config{
-		Started: health.AlwaysStarted,
-		Ready:   health.AlwaysReady,
-	})
-
-	ctx, cancel := context.WithCancel(context.Background())
-	errCh := make(chan error, 1)
-
-	go func() { errCh <- r.Serve(ctx, srv, 50*time.Millisecond) }()
-
-	waitForStatus(t, base+"/livez", http.StatusOK)
-	waitForStatus(t, base+"/readyz", http.StatusOK)
 
 	cancel()
 
@@ -120,365 +339,122 @@ func TestServeServesUntilContextIsCancelled(t *testing.T) {
 	}
 }
 
-func TestServeDrainsBeforeShuttingDown(t *testing.T) {
-	var calls atomic.Int32
-
-	r, srv, base := startServer(t, health.Config{
-		Started: health.AlwaysStarted,
-		Ready: func(context.Context) bool {
-			calls.Add(1)
-			return true
-		},
-	})
-
-	ctx, cancel := context.WithCancel(context.Background())
-	errCh := make(chan error, 1)
-
-	go func() { errCh <- r.Serve(ctx, srv, 300*time.Millisecond) }()
-
-	waitForStatus(t, base+"/livez", http.StatusOK)
-	waitForStatus(t, base+"/readyz", http.StatusOK)
-
-	cancel()
-
-	// The drain starts when Serve observes the cancellation, a moment after
-	// cancel returns. A readiness probe in that moment is still answered by the
-	// check, so the count is taken once the first 503 shows the drain began.
-	waitForStatus(t, base+"/readyz", http.StatusServiceUnavailable)
-
-	callsAtDrain := calls.Load()
-
-	// While draining, readiness answers 503 without consulting the check: its
-	// dependencies may already be closing.
-	if code := statusOf(t, base+"/readyz"); code != http.StatusServiceUnavailable {
-		t.Fatalf("readiness during drain = %d, want %d", code, http.StatusServiceUnavailable)
-	}
-
-	// Liveness keeps answering while the process drains.
-	if code := statusOf(t, base+"/livez"); code != http.StatusOK {
-		t.Fatalf("liveness during drain = %d, want %d", code, http.StatusOK)
-	}
-
-	if got := calls.Load(); got != callsAtDrain {
-		t.Fatalf("ReadyFunc called %d times while draining, want 0", got-callsAtDrain)
-	}
-
-	if err := waitForServe(t, errCh); err != nil {
-		t.Fatalf("Serve: %v", err)
-	}
-}
-
-func TestServeFinishesWithinTheDrainBudgetAndClosesStragglers(t *testing.T) {
+func TestServeReturnsTheListenErrorForAnAddressInUse(t *testing.T) {
 	t.Parallel()
 
-	r, srv, base := startServer(t, alwaysHealthy())
+	taken := listenLoopback(t)
+	t.Cleanup(func() { _ = taken.Close() })
 
-	stuckStarted := make(chan struct{})
+	r := mustNew(t, alwaysHealthy())
+	srv := &http.Server{Addr: taken.Addr().String(), Handler: r, ReadHeaderTimeout: time.Second}
 
-	// A request that never finishes on its own: only Close ends it.
-	r.Get("/stuck", func(_ http.ResponseWriter, req *http.Request) {
-		close(stuckStarted)
-		<-req.Context().Done()
-	})
+	err := r.Serve(t.Context(), srv, 0)
 
-	const drain = 400 * time.Millisecond
-
-	ctx, cancel := context.WithCancel(context.Background())
-	errCh := make(chan error, 1)
-
-	go func() { errCh <- r.Serve(ctx, srv, drain) }()
-
-	waitForStatus(t, base+"/livez", http.StatusOK)
-
-	stuckErr := make(chan error, 1)
-
-	go func() {
-		resp, err := http.Get(base + "/stuck")
-		if err == nil {
-			_ = resp.Body.Close()
-		}
-		stuckErr <- err
-	}()
-
-	<-stuckStarted
-
-	start := time.Now()
-	cancel()
-
-	// The server keeps serving for the first part of the budget, with
-	// readiness at 503.
-	waitForStatus(t, base+"/readyz", http.StatusServiceUnavailable)
-
-	err := waitForServe(t, errCh)
-	elapsed := time.Since(start)
-
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("Serve = %v, want the missed shutdown deadline", err)
-	}
-	if elapsed > drain+drainSlack {
-		t.Fatalf("Serve took %s, over the %s budget", elapsed, drain)
-	}
-	if reqErr := <-stuckErr; reqErr == nil {
-		t.Fatal("the stuck request completed; want its connection closed")
+	var opErr *net.OpError
+	if !errors.As(err, &opErr) || opErr.Op != "listen" {
+		t.Fatalf("Serve = %v, want the listen error", err)
 	}
 }
 
-// drainSlack is how far past its budget a drain may run in a test before it
-// counts as an overshoot.
-const drainSlack = 150 * time.Millisecond
+// TestServingCanRetryAfterAFailedListen: a listen failure in Serve or Run
+// leaves the Router unserved, so a retry on a free address serves.
+func TestServingCanRetryAfterAFailedListen(t *testing.T) {
+	t.Parallel()
 
-func TestRunClosesOnASecondSignalDuringTheWait(t *testing.T) {
-	r, srv, base := startServer(t, alwaysHealthy())
-
-	errCh := make(chan error, 1)
-
-	go func() { errCh <- r.Run(srv, 10*time.Second) }()
-
-	waitForStatus(t, base+"/livez", http.StatusOK)
-	signalSelf(t)
-	waitForStatus(t, base+"/readyz", http.StatusServiceUnavailable)
-
-	start := time.Now()
-	signalSelf(t)
-
-	if err := waitForServe(t, errCh); err != nil {
-		t.Fatalf("Run: %v", err)
+	failing := map[string]func(context.Context, *router.Router, *http.Server) error{
+		"Serve": func(ctx context.Context, r *router.Router, srv *http.Server) error { return r.Serve(ctx, srv, 0) },
+		"Run":   func(_ context.Context, r *router.Router, srv *http.Server) error { return r.Run(srv, 0) },
 	}
-	if elapsed := time.Since(start); elapsed > drainSlack {
-		t.Fatalf("Run took %s after the second signal, want well under the 5s wait", elapsed)
-	}
-}
 
-func TestRunClosesOnASecondSignalDuringShutdown(t *testing.T) {
-	r, srv, base := startServer(t, alwaysHealthy())
+	for name, serve := range failing {
+		t.Run("after "+name, func(t *testing.T) {
+			t.Parallel()
 
-	stuckStarted := make(chan struct{})
+			taken := listenLoopback(t)
+			t.Cleanup(func() { _ = taken.Close() })
 
-	r.Get("/stuck", func(_ http.ResponseWriter, req *http.Request) {
-		close(stuckStarted)
-		<-req.Context().Done()
-	})
+			r := mustNew(t, alwaysHealthy())
 
-	errCh := make(chan error, 1)
+			busy := &http.Server{Addr: taken.Addr().String(), Handler: r, ReadHeaderTimeout: time.Second}
 
-	// 1s of wait, then a 1s shutdown deadline the stuck request would miss.
-	go func() { errCh <- r.Run(srv, 2*time.Second) }()
+			var opErr *net.OpError
+			if err := serve(t.Context(), r, busy); !errors.As(err, &opErr) || opErr.Op != "listen" {
+				t.Fatalf("%s on a taken address = %v, want the listen error", name, err)
+			}
 
-	waitForStatus(t, base+"/livez", http.StatusOK)
+			ctx, cancel := context.WithCancel(t.Context())
+			cancel()
 
-	stuckErr := make(chan error, 1)
-
-	go func() {
-		resp, err := http.Get(base + "/stuck")
-		if err == nil {
-			_ = resp.Body.Close()
-		}
-		stuckErr <- err
-	}()
-
-	<-stuckStarted
-	signalSelf(t)
-
-	// Shutdown closes the listener first, so a refused dial means the
-	// shutdown phase has begun.
-	waitForRefused(t, srv.Addr)
-
-	start := time.Now()
-	signalSelf(t)
-
-	if err := waitForServe(t, errCh); err != nil {
-		t.Fatalf("Run = %v, want nil: the second signal closes the server before the deadline", err)
-	}
-	if elapsed := time.Since(start); elapsed > drainSlack {
-		t.Fatalf("Run took %s after the second signal, want well under the 1s deadline", elapsed)
-	}
-	if err := <-stuckErr; err == nil {
-		t.Fatal("the stuck request completed; want its connection closed")
+			free := &http.Server{Addr: "127.0.0.1:0", Handler: r, ReadHeaderTimeout: time.Second}
+			if err := r.Serve(ctx, free, 0); err != nil {
+				t.Fatalf("Serve after a failed listen = %v, want nil", err)
+			}
+		})
 	}
 }
 
-// signalSelf sends SIGINT to the test process, for Run to catch.
-//
-// The Run tests signal the test process itself, so they must not run in
-// parallel with each other (Run is the only signal listener). Each waits for
-// Run's listener to be up before the first signal and for the drain to start
-// before the second, so neither signal is lost or coalesced.
-func signalSelf(t *testing.T) {
-	t.Helper()
-
-	if err := syscall.Kill(os.Getpid(), syscall.SIGINT); err != nil {
-		t.Fatalf("signal: %v", err)
-	}
-}
-
-func waitForRefused(t *testing.T, addr string) {
-	t.Helper()
-
-	deadline := time.Now().Add(probeTimeout)
-
-	for time.Now().Before(deadline) {
-		conn, err := net.DialTimeout("tcp", addr, probeTimeout)
-		if err != nil {
-			return
-		}
-		_ = conn.Close()
-
-		time.Sleep(5 * time.Millisecond)
-	}
-
-	t.Fatalf("%s still accepts connections", addr)
-}
-
-func TestServeLogsTheDrain(t *testing.T) {
+func TestServeListenerLogsTheDrain(t *testing.T) {
+	// Not parallel: the router logger writes to the process-wide output.
 	var buf bytes.Buffer
 
 	restore := log.UseOutputForTests(&buf)
 	defer restore()
 
-	r, srv, base := startServer(t, health.Config{
-		Started: health.AlwaysStarted,
-		Ready:   health.AlwaysReady,
+	synctest.Test(t, func(t *testing.T) {
+		s := startMem(t, alwaysHealthy(), 10*time.Second)
+
+		s.cancel()
+
+		if err := <-s.errCh; err != nil {
+			t.Fatalf("ServeListener: %v", err)
+		}
 	})
 
-	ctx, cancel := context.WithCancel(context.Background())
-	errCh := make(chan error, 1)
-
-	go func() { errCh <- r.Serve(ctx, srv, 20*time.Millisecond) }()
-
-	waitForStatus(t, base+"/livez", http.StatusOK)
-
-	cancel()
-
-	if err := waitForServe(t, errCh); err != nil {
-		t.Fatalf("Serve: %v", err)
-	}
-
-	line := buf.String()
-	if !strings.Contains(line, "draining") || !strings.Contains(line, "drained") {
-		t.Fatalf("drain logs missing, got %q", line)
+	out := buf.String()
+	if !containsAll(out, []string{"msg=draining", "wait=5s", "msg=drained"}) {
+		t.Fatalf("drain logs missing, got %q", out)
 	}
 }
 
-func TestServeFinishesInFlightRequests(t *testing.T) {
-	r, srv, base := startServer(t, health.Config{
-		Started: health.AlwaysStarted,
-		Ready:   health.AlwaysReady,
-	})
-
-	requestStarted := make(chan struct{})
-
-	r.Get("/slow", func(w http.ResponseWriter, _ *http.Request) {
-		close(requestStarted)
-		time.Sleep(50 * time.Millisecond)
-		w.WriteHeader(http.StatusOK)
-	})
-
-	ctx, cancel := context.WithCancel(context.Background())
-	errCh := make(chan error, 1)
-
-	go func() { errCh <- r.Serve(ctx, srv, 300*time.Millisecond) }()
-
-	waitForStatus(t, base+"/livez", http.StatusOK)
-
-	slowStatus := make(chan int, 1)
-
-	go func() { slowStatus <- statusOf(t, base+"/slow") }()
-
-	<-requestStarted
-
-	cancel()
-
-	if code := <-slowStatus; code != http.StatusOK {
-		t.Fatalf("in-flight request = %d, want %d", code, http.StatusOK)
-	}
-	if err := waitForServe(t, errCh); err != nil {
-		t.Fatalf("Serve: %v", err)
-	}
+// memServer is a Router serving on an in-memory listener inside a synctest
+// bubble, so its drain runs on the bubble's fake clock.
+type memServer struct {
+	r      *router.Router
+	ln     *router.MemListener
+	cancel context.CancelFunc
+	errCh  chan error
 }
 
-func TestServeWithZeroDrainShutsDownImmediately(t *testing.T) {
-	r, srv, base := startServer(t, health.Config{
-		Started: health.AlwaysStarted,
-		Ready:   health.AlwaysReady,
-	})
-
-	requestStarted := make(chan struct{})
-
-	r.Get("/slow", func(w http.ResponseWriter, _ *http.Request) {
-		close(requestStarted)
-		time.Sleep(100 * time.Millisecond)
-		w.WriteHeader(http.StatusOK)
-	})
-
-	ctx, cancel := context.WithCancel(context.Background())
-	errCh := make(chan error, 1)
-
-	go func() { errCh <- r.Serve(ctx, srv, 0) }()
-
-	waitForStatus(t, base+"/livez", http.StatusOK)
-
-	slowStatus := make(chan int, 1)
-
-	go func() { slowStatus <- statusOf(t, base+"/slow") }()
-
-	<-requestStarted
-
-	cancel()
-
-	// A request is still in flight and the shutdown deadline is zero: the
-	// server closes rather than reporting a deadline it never had time to meet.
-	if err := waitForServe(t, errCh); err != nil {
-		t.Fatalf("Serve: %v", err)
-	}
-
-	if code := statusOf(t, base+"/livez"); code != 0 {
-		t.Fatalf("server still answering after shutdown with status %d", code)
-	}
-}
-
-func TestServeReturnsServerErrors(t *testing.T) {
-	r := mustNew(t, health.Config{Started: health.AlwaysStarted, Ready: health.AlwaysReady})
-
-	addr := freeAddr(t)
-
-	listener, listenErr := net.Listen("tcp", addr)
-	if listenErr != nil {
-		t.Fatalf("listen: %v", listenErr)
-	}
-	defer listener.Close()
-
-	srv := &http.Server{Addr: addr, Handler: r, ReadHeaderTimeout: time.Second}
-
-	if err := r.Serve(context.Background(), srv, 0); err == nil {
-		t.Fatal("Serve returned nil for an address already in use")
-	}
-}
-
-// startServer builds a router and a server on a free loopback port. Serve is
-// left to the caller so each test controls the lifetime.
-func startServer(t *testing.T, cfg health.Config) (*router.Router, *http.Server, string) {
+// startMem starts ServeListener with drain and waits for it to settle. Call
+// it inside the bubble.
+func startMem(t *testing.T, cfg health.Config, drain time.Duration) *memServer {
 	t.Helper()
 
 	r := mustNew(t, cfg)
-	addr := freeAddr(t)
-	srv := &http.Server{Addr: addr, Handler: r, ReadHeaderTimeout: time.Second}
+	ln := router.NewMemListener()
+	srv := &http.Server{Handler: r, ReadHeaderTimeout: time.Second}
+	ctx, cancel := context.WithCancel(t.Context())
 
-	t.Cleanup(func() { _ = srv.Close() })
+	s := &memServer{r: r, ln: ln, cancel: cancel, errCh: make(chan error, 1)}
 
-	return r, srv, "http://" + addr
+	go func() { s.errCh <- r.ServeListener(ctx, ln, srv, drain) }()
+
+	t.Cleanup(func() {
+		cancel()
+		_ = srv.Close()
+	})
+
+	synctest.Wait()
+
+	return s
 }
 
-func freeAddr(t *testing.T) string {
-	t.Helper()
+// failingListener fails every Accept with err.
+type failingListener struct{ err error }
 
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-	defer listener.Close()
-
-	return listener.Addr().String()
-}
+func (l failingListener) Accept() (net.Conn, error) { return nil, l.err }
+func (failingListener) Close() error                { return nil }
+func (failingListener) Addr() net.Addr              { return &net.TCPAddr{} }
 
 func waitForServe(t *testing.T, errCh <-chan error) error {
 	t.Helper()
@@ -492,41 +468,17 @@ func waitForServe(t *testing.T, errCh <-chan error) error {
 	}
 }
 
-func waitForStatus(t *testing.T, url string, want int) {
+// listenLoopback listens on a free loopback port. The listener is the test's
+// to close or to hand to the server.
+func listenLoopback(t *testing.T) net.Listener {
 	t.Helper()
 
-	deadline := time.Now().Add(2 * time.Second)
+	var lc net.ListenConfig
 
-	for time.Now().Before(deadline) {
-		if statusOf(t, url) == want {
-			return
-		}
-
-		time.Sleep(5 * time.Millisecond)
-	}
-
-	t.Fatalf("%s never returned %d", url, want)
-}
-
-// statusOf returns the response status, or 0 when the server cannot be
-// reached.
-func statusOf(t *testing.T, url string) int {
-	t.Helper()
-
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
+	ln, err := lc.Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
-		t.Fatalf("new request: %v", err)
+		t.Fatalf("listen: %v", err)
 	}
 
-	client := &http.Client{Timeout: probeTimeout}
-
-	resp, doErr := client.Do(req)
-	if doErr != nil {
-		return 0
-	}
-	defer resp.Body.Close()
-
-	_, _ = io.Copy(io.Discard, resp.Body)
-
-	return resp.StatusCode
+	return ln
 }

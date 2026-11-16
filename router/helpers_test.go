@@ -2,7 +2,6 @@ package router_test
 
 import (
 	"bytes"
-	"context"
 	"io"
 	"log/slog"
 	"maps"
@@ -22,13 +21,31 @@ import (
 type logSink struct {
 	mu  sync.Mutex
 	buf bytes.Buffer
+	// written is closed and replaced on every Write, waking waitFor.
+	written chan struct{}
+}
+
+func newLogSink() *logSink {
+	return &logSink{written: make(chan struct{})}
 }
 
 func (s *logSink) Write(p []byte) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	close(s.written)
+	s.written = make(chan struct{})
+
 	return s.buf.Write(p)
+}
+
+// snapshot returns what has been written so far, and a channel closed by the
+// next Write.
+func (s *logSink) snapshot() (string, <-chan struct{}) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.buf.String(), s.written
 }
 
 func (s *logSink) String() string {
@@ -48,20 +65,23 @@ func (s *logSink) logger() *slog.Logger {
 func (s *logSink) waitFor(t *testing.T, parts ...string) string {
 	t.Helper()
 
-	deadline := time.Now().Add(probeTimeout)
+	timeout := time.NewTimer(probeTimeout)
+	defer timeout.Stop()
 
 	for {
-		for line := range strings.Lines(s.String()) {
+		out, written := s.snapshot()
+
+		for line := range strings.Lines(out) {
 			if containsAll(line, parts) {
 				return line
 			}
 		}
 
-		if time.Now().After(deadline) {
+		select {
+		case <-written:
+		case <-timeout.C:
 			t.Fatalf("no log line contains all of %q; got:\n%s", parts, s.String())
 		}
-
-		time.Sleep(5 * time.Millisecond)
 	}
 }
 
@@ -101,7 +121,7 @@ type response struct {
 func do(t *testing.T, method, url string, header http.Header) response {
 	t.Helper()
 
-	req, err := http.NewRequestWithContext(context.Background(), method, url, nil)
+	req, err := http.NewRequestWithContext(t.Context(), method, url, nil)
 	if err != nil {
 		t.Fatalf("new request: %v", err)
 	}
