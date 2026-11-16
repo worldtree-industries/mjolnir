@@ -32,7 +32,7 @@ Mjolnir is an opinionated wrapper around [go-chi/chi](https://github.com/go-chi/
   - Automatic internal error logging
   - Panic recovery
   - Helper functions for common HTTP status codes
-  - Handlers return an `*httpx.Problem` instead of writing the response themselves
+  - Handlers return an `error` carrying an `*httpx.Problem` instead of writing the error response themselves
 
 ## Installation
 
@@ -79,7 +79,7 @@ func main() {
 
   codec := httpx.NewCodec(httpx.DefaultMaxBodyBytes)
 
-  r.Get("/", httpx.Handler(func(w http.ResponseWriter, r *http.Request) *httpx.Problem {
+  r.Get("/", httpx.Handler(func(w http.ResponseWriter, r *http.Request) error {
     return codec.Respond(w, r, http.StatusOK, map[string]string{"msg": "Hello World!"})
   }))
 
@@ -151,18 +151,18 @@ server immediately instead.
 ### HTTP Utility Functions
 
 `utils/httpx` is the one place handlers translate to and from HTTP. A
-`Codec` decodes JSON request bodies and writes JSON responses; both return a
-`*httpx.Problem` instead of an `error`:
+`Codec` decodes JSON request bodies and writes JSON responses; both return an
+`error` that is a `*httpx.Problem` on failure and `nil` on success:
 
 ```go
 import "github.com/dfryer1193/mjolnir/utils/httpx"
 
 codec := httpx.NewCodec(httpx.DefaultMaxBodyBytes) // 1 MiB; httpx.Codec{} is the same
 
-r.Post("/widgets", httpx.Handler(func(w http.ResponseWriter, r *http.Request) *httpx.Problem {
+r.Post("/widgets", httpx.Handler(func(w http.ResponseWriter, r *http.Request) error {
   var in Widget
-  if p := codec.Decode(w, r, &in); p != nil {
-    return p
+  if err := codec.Decode(w, r, &in); err != nil {
+    return err
   }
   return codec.Respond(w, r, http.StatusCreated, in)
 }))
@@ -176,11 +176,13 @@ writing anything, so a marshal failure still becomes a clean 500.
 
 ### Error Handling Utilities
 
-Handlers wrapped in `httpx.Handler` return a `*httpx.Problem`, or `nil` when
-they wrote a response themselves:
+Handlers wrapped in `httpx.Handler` return an `error`, or `nil` when they
+wrote a response themselves. An error that is or wraps (`%w`) a
+`*httpx.Problem` sends that problem; any other error is sent as
+`httpx.Internal(err)`, a 500 that logs the error as its cause:
 
 ```go
-r.Get("/widgets/{id}", httpx.Handler(func(w http.ResponseWriter, r *http.Request) *httpx.Problem {
+r.Get("/widgets/{id}", httpx.Handler(func(w http.ResponseWriter, r *http.Request) error {
   widget, err := store.Get(r.Context(), chi.URLParam(r, "id"))
   switch {
   case errors.Is(err, store.ErrNotFound):
