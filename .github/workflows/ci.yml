@@ -1,8 +1,13 @@
 name: CI
 
 on:
+  # Every pull request, whatever its base, so each layer of a stack is checked
+  # against the layer below it. `edited` re-runs CI when a PR's base changes,
+  # for example when a stack's lower layer merges and GitHub retargets the
+  # next one onto main; the default types do not fire on that. Title or body
+  # edits also re-run it, which costs a run but never skips one.
   pull_request:
-    branches: [main]
+    types: [opened, synchronize, reopened, edited]
 
 permissions:
   contents: read
