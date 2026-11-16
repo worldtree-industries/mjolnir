@@ -32,23 +32,23 @@ func main() {
 
 	codec := httpx.NewCodec(httpx.DefaultMaxBodyBytes)
 
-	r.Get("/", httpx.Handler(func(w http.ResponseWriter, _ *http.Request) *httpx.Problem {
+	r.Get("/", httpx.Handler(func(w http.ResponseWriter, _ *http.Request) error {
 		if _, writeErr := w.Write([]byte("Hello World!")); writeErr != nil {
 			return httpx.Internal(writeErr)
 		}
 		return nil
 	}))
 
-	r.Get("/json", httpx.Handler(func(w http.ResponseWriter, req *http.Request) *httpx.Problem {
+	r.Get("/json", httpx.Handler(func(w http.ResponseWriter, req *http.Request) error {
 		return codec.Respond(w, req, http.StatusOK, map[string]string{"msg": "Hello World!"})
 	}))
 
-	r.Post("/json", httpx.Handler(func(w http.ResponseWriter, req *http.Request) *httpx.Problem {
+	r.Post("/json", httpx.Handler(func(w http.ResponseWriter, req *http.Request) error {
 		var name struct {
 			Name string `json:"name"`
 		}
-		if p := codec.Decode(w, req, &name); p != nil {
-			return p
+		if decodeErr := codec.Decode(w, req, &name); decodeErr != nil {
+			return decodeErr
 		}
 		return codec.Respond(w, req, http.StatusOK, map[string]string{"msg": "Hello " + name.Name})
 	}))
@@ -57,7 +57,7 @@ func main() {
 		panic("This is a panic")
 	})
 
-	r.Get("/error", httpx.Handler(func(_ http.ResponseWriter, _ *http.Request) *httpx.Problem {
+	r.Get("/error", httpx.Handler(func(_ http.ResponseWriter, _ *http.Request) error {
 		return httpx.ServiceUnavailable(errors.New("this is an error"))
 	}))
 
