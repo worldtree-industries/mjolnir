@@ -242,7 +242,7 @@ func (r *Router) serve(
 	r.health.Drain()
 	lg.InfoContext(ctx, "draining", "drain", drain.String(), "wait", wait.String(), "shutdown", grace.String())
 
-	if err := stop(ctx, srv, wait, grace, abort, serverErr); err != nil {
+	if err := stop(ctx, lg, srv, wait, grace, abort, serverErr); err != nil {
 		return err
 	}
 
@@ -254,9 +254,11 @@ func (r *Router) serve(
 // stop runs the two phases of a drain: srv keeps serving for wait, then
 // Shutdown gets grace as its deadline. abort closes srv during either phase,
 // and so does a missed deadline, before its error is returned. serverErr
-// carries the result of the serve call and is read exactly once.
+// carries the result of the serve call and is read exactly once. An abort is
+// logged to lg.
 func stop(
 	ctx context.Context,
+	lg *slog.Logger,
 	srv *http.Server,
 	wait, grace time.Duration,
 	abort <-chan struct{},
@@ -269,7 +271,7 @@ func stop(
 		select {
 		case <-timer.C:
 		case <-abort:
-			log.GetLogger("router").WarnContext(ctx, "drain aborted", "phase", "wait")
+			lg.WarnContext(ctx, "drain aborted", "phase", "wait")
 			return closeServer(srv, serverErr)
 		case err := <-serverErr:
 			return err
@@ -295,7 +297,7 @@ func stop(
 
 		return <-serverErr
 	case <-abort:
-		log.GetLogger("router").WarnContext(ctx, "drain aborted", "phase", "shutdown")
+		lg.WarnContext(ctx, "drain aborted", "phase", "shutdown")
 
 		closeErr := closeServer(srv, serverErr)
 		// Close has dropped every connection; cancelling stops Shutdown
