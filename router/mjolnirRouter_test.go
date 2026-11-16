@@ -209,7 +209,7 @@ func TestAppRouteOnAProbePathIsUnreachable(t *testing.T) {
 func TestFailingReadinessProbeAppearsInTheAccessLog(t *testing.T) {
 	t.Parallel()
 
-	logs := &logSink{}
+	logs := newLogSink()
 	r := mustNewWith(t, router.Config{
 		Health:       health.Config{Started: health.AlwaysStarted, Ready: func(context.Context) bool { return false }},
 		AccessLogger: logs.logger(),
@@ -255,7 +255,7 @@ func TestAppMiddlewareSeesTheRequestID(t *testing.T) {
 func TestRequestRejectedByAppMiddlewareIsAccessLogged(t *testing.T) {
 	t.Parallel()
 
-	logs := &logSink{}
+	logs := newLogSink()
 	r := mustNewWith(t, router.Config{Health: alwaysHealthy(), AccessLogger: logs.logger()})
 
 	r.Use(func(http.Handler) http.Handler {
@@ -278,7 +278,7 @@ func TestRequestRejectedByAppMiddlewareIsAccessLogged(t *testing.T) {
 func TestSpoofedForwardingHeadersAreIgnoredByDefault(t *testing.T) {
 	t.Parallel()
 
-	logs := &logSink{}
+	logs := newLogSink()
 	r := mustNewWith(t, router.Config{Health: alwaysHealthy(), AccessLogger: logs.logger()})
 
 	srv := httptest.NewServer(r)
@@ -302,7 +302,7 @@ func TestSpoofedForwardingHeadersAreIgnoredByDefault(t *testing.T) {
 func TestTrustedProxiesResolveTheClientFromXForwardedFor(t *testing.T) {
 	t.Parallel()
 
-	logs := &logSink{}
+	logs := newLogSink()
 	r := mustNewWith(t, router.Config{
 		Health:         alwaysHealthy(),
 		TrustedProxies: []netip.Prefix{netip.MustParsePrefix("127.0.0.0/8")},
@@ -337,7 +337,7 @@ func TestUnparsablePeerResolvesNoClientIP(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			logs := &logSink{}
+			logs := newLogSink()
 			r := mustNewWith(t, router.Config{
 				Health:         alwaysHealthy(),
 				TrustedProxies: prefixes,
@@ -369,7 +369,7 @@ func TestNewRejectsAnInvalidTrustedProxy(t *testing.T) {
 func TestPanicBeforeAWriteIsA500Problem(t *testing.T) {
 	t.Parallel()
 
-	logs := &logSink{}
+	logs := newLogSink()
 	r := mustNewWith(t, router.Config{Health: alwaysHealthy(), AccessLogger: logs.logger()})
 
 	r.Get("/boom", func(http.ResponseWriter, *http.Request) {
@@ -414,7 +414,7 @@ func TestPanicBeforeAWriteIsA500Problem(t *testing.T) {
 func TestPanicInAppMiddlewareIsRecoveredAndAccessLogged(t *testing.T) {
 	t.Parallel()
 
-	logs := &logSink{}
+	logs := newLogSink()
 	r := mustNewWith(t, router.Config{Health: alwaysHealthy(), AccessLogger: logs.logger()})
 
 	r.Use(func(http.Handler) http.Handler {
@@ -438,7 +438,7 @@ func TestPanicInAppMiddlewareIsRecoveredAndAccessLogged(t *testing.T) {
 func TestPanicAfterAWriteAbortsTheConnection(t *testing.T) {
 	t.Parallel()
 
-	logs := &logSink{}
+	logs := newLogSink()
 	r := mustNewWith(t, router.Config{Health: alwaysHealthy(), AccessLogger: logs.logger()})
 
 	r.Get("/partial", func(w http.ResponseWriter, _ *http.Request) {

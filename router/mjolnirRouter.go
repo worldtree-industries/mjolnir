@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/netip"
 	"os"
@@ -36,8 +37,8 @@ type Router struct {
 	served atomic.Bool
 }
 
-// ErrAlreadyServed is returned by a second Serve or Run: a Router serves one
-// lifetime.
+// ErrAlreadyServed is returned by a second Serve, ServeListener or Run: a
+// Router serves one lifetime.
 var ErrAlreadyServed = errors.New("router: already served")
 
 // Config configures a Router.
@@ -159,7 +160,26 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	r.outer.ServeHTTP(w, req)
 }
 
-// Serve runs srv until ctx is cancelled, then drains and shuts it down.
+// Serve listens on srv.Addr (":http" when empty) and serves srv there like
+// [Router.ServeListener]. A listen failure, such as an address in use, is
+// returned before any drain starts.
+func (r *Router) Serve(ctx context.Context, srv *http.Server, drain time.Duration) error {
+	if !r.served.CompareAndSwap(false, true) {
+		return ErrAlreadyServed
+	}
+
+	ln, err := listen(ctx, srv)
+	if err != nil {
+		return err
+	}
+
+	return r.serve(ctx, ln, srv, drain, nil)
+}
+
+// ServeListener serves srv on ln until ctx is cancelled, then drains and
+// shuts it down. It owns ln from the call onwards: shutting srv down closes
+// it, and so does an [ErrAlreadyServed] return. srv.Addr is not used. For TLS,
+// wrap the listener with [crypto/tls.NewListener] first.
 //
 // The drain fits inside the drain budget, split by halves. On cancellation
 // readiness answers 503 so load balancers stop sending traffic, and srv keeps
@@ -169,31 +189,61 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 // dropping in-flight requests.
 //
 // A Router serves one lifetime: once drained, readiness stays 503, and a
-// second Serve or Run returns [ErrAlreadyServed] without touching srv.
+// second Serve, ServeListener or Run returns [ErrAlreadyServed] without
+// touching srv.
 //
-// Serve returns an error if the server fails or the shutdown deadline is
-// exceeded. It never calls [os.Exit].
-func (r *Router) Serve(ctx context.Context, srv *http.Server, drain time.Duration) error {
-	return r.serve(ctx, srv, drain, nil)
+// ServeListener returns an error if the server fails or the shutdown deadline
+// is exceeded. It never calls [os.Exit].
+func (r *Router) ServeListener(ctx context.Context, ln net.Listener, srv *http.Server, drain time.Duration) error {
+	if !r.served.CompareAndSwap(false, true) {
+		_ = ln.Close()
+		return ErrAlreadyServed
+	}
+
+	return r.serve(ctx, ln, srv, drain, nil)
 }
 
 // signalQueue buffers the first signal and the second one that aborts the
 // drain.
 const signalQueue = 2
 
-// Run serves srv like Serve, starting the drain on SIGINT or SIGTERM. A
-// second signal closes the server at any point in the drain, whether it is
-// still serving or already in Shutdown.
+// Run listens and serves srv like Serve, starting the drain on SIGINT or
+// SIGTERM. A second signal closes the server at any point in the drain,
+// whether it is still serving or already in Shutdown.
 func (r *Router) Run(srv *http.Server, drain time.Duration) error {
+	if !r.served.CompareAndSwap(false, true) {
+		return ErrAlreadyServed
+	}
+
 	signals := make(chan os.Signal, signalQueue)
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(signals)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx := context.Background()
+
+	ln, err := listen(ctx, srv)
+	if err != nil {
+		return err
+	}
+
+	return r.serveSignals(ctx, signals, ln, srv, drain)
+}
+
+// serveSignals serves srv on ln like ServeListener, driven by signals as well
+// as ctx: the first signal starts the drain, and the next one, or the first
+// after ctx is done, closes the server at any point in it.
+func (r *Router) serveSignals(
+	ctx context.Context,
+	signals <-chan os.Signal,
+	ln net.Listener,
+	srv *http.Server,
+	drain time.Duration,
+) error {
+	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	runDone := make(chan struct{})
-	defer close(runDone)
+	done := make(chan struct{})
+	defer close(done)
 
 	abort := make(chan struct{})
 
@@ -201,34 +251,49 @@ func (r *Router) Run(srv *http.Server, drain time.Duration) error {
 		select {
 		case <-signals:
 			cancel()
-		case <-runDone:
+		case <-ctx.Done():
+		case <-done:
 			return
 		}
 
 		select {
 		case <-signals:
 			close(abort)
-		case <-runDone:
+		case <-done:
 		}
 	}()
 
-	return r.serve(ctx, srv, drain, abort)
+	return r.serve(ctx, ln, srv, drain, abort)
 }
 
-// serve is the lifecycle behind Serve and Run. abort, when closed, closes the
-// server at any point in the drain.
+// listen listens on srv.Addr, defaulting it as ListenAndServe does.
+func listen(ctx context.Context, srv *http.Server) (net.Listener, error) {
+	addr := srv.Addr
+	if addr == "" {
+		addr = ":http"
+	}
+
+	var lc net.ListenConfig
+
+	ln, err := lc.Listen(ctx, "tcp", addr)
+	if err != nil {
+		return nil, fmt.Errorf("listen: %w", err)
+	}
+
+	return ln, nil
+}
+
+// serve is the lifecycle behind every way of serving, once the Router is
+// claimed. abort, when closed, closes the server at any point in the drain.
 func (r *Router) serve(
 	ctx context.Context,
+	ln net.Listener,
 	srv *http.Server,
 	drain time.Duration,
 	abort <-chan struct{},
 ) error {
-	if !r.served.CompareAndSwap(false, true) {
-		return ErrAlreadyServed
-	}
-
 	serverErr := make(chan error, 1)
-	go func() { serverErr <- runServer(srv) }()
+	go func() { serverErr <- runServer(srv, ln) }()
 
 	select {
 	case err := <-serverErr:
@@ -329,10 +394,10 @@ func drainBudget(total time.Duration) (time.Duration, time.Duration) {
 	return wait, total - wait
 }
 
-// runServer serves srv, treating the error from Shutdown or Close as a clean
-// stop.
-func runServer(srv *http.Server) error {
-	err := srv.ListenAndServe()
+// runServer serves srv on ln, treating the error from Shutdown or Close as a
+// clean stop.
+func runServer(srv *http.Server, ln net.Listener) error {
+	err := srv.Serve(ln)
 	if err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return fmt.Errorf("serve: %w", err)
 	}
