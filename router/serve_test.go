@@ -139,21 +139,28 @@ func TestServeDrainsBeforeShuttingDown(t *testing.T) {
 	waitForStatus(t, base+"/livez", http.StatusOK)
 	waitForStatus(t, base+"/readyz", http.StatusOK)
 
-	callsBeforeDrain := calls.Load()
-
 	cancel()
 
-	// Readiness flips as soon as the drain starts, without consulting the
-	// check: its dependencies may already be closing.
+	// The drain starts when Serve observes the cancellation, a moment after
+	// cancel returns. A readiness probe in that moment is still answered by the
+	// check, so the count is taken once the first 503 shows the drain began.
 	waitForStatus(t, base+"/readyz", http.StatusServiceUnavailable)
+
+	callsAtDrain := calls.Load()
+
+	// While draining, readiness answers 503 without consulting the check: its
+	// dependencies may already be closing.
+	if code := statusOf(t, base+"/readyz"); code != http.StatusServiceUnavailable {
+		t.Fatalf("readiness during drain = %d, want %d", code, http.StatusServiceUnavailable)
+	}
 
 	// Liveness keeps answering while the process drains.
 	if code := statusOf(t, base+"/livez"); code != http.StatusOK {
 		t.Fatalf("liveness during drain = %d, want %d", code, http.StatusOK)
 	}
 
-	if got := calls.Load(); got != callsBeforeDrain {
-		t.Fatalf("ReadyFunc called %d times while draining, want 0", got-callsBeforeDrain)
+	if got := calls.Load(); got != callsAtDrain {
+		t.Fatalf("ReadyFunc called %d times while draining, want 0", got-callsAtDrain)
 	}
 
 	if err := waitForServe(t, errCh); err != nil {
