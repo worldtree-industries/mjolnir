@@ -37,6 +37,7 @@ A component that formats and delivers log events to a destination. The framework
 | **Problem** | An HTTP error a handler returns instead of writing the response: an RFC 9457 `application/problem+json` document with a `code` extension. Its detail is public for 4xx and server-only for 5xx; its status and code are never rewritten (ADR-0008) |
 | **Problem Code** | The stable, machine-readable `code` member of a problem, the thing clients switch on; required on every problem |
 | **Codec** | The `httpx` JSON codec: decodes a bounded request body (1 MiB by default) and writes JSON responses, reporting failures as problems |
+| **Started Response** | A response whose status line has been sent (a final status or any body byte); from then on its status cannot change. Detected only through `middleware`'s `ResponseWriter` (`middleware.ResponseStarted`) |
 | **JSON Stream** | The machine-readable stream, written to a file for Victorialogs/Grafana |
 | **Text Stream** | The human-readable stream, written to stdout for CLI/kubectl |
 | **Option** | A container for a value that may be absent |

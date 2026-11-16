@@ -24,3 +24,22 @@ type ResponseWriter = chimiddleware.WrapResponseWriter
 func NewResponseWriter(w http.ResponseWriter, protoMajor int) ResponseWriter {
 	return chimiddleware.NewWrapResponseWriter(w, protoMajor)
 }
+
+// AsResponseWriter returns w itself when it already is a ResponseWriter, so
+// every layer of a request observes one status, and otherwise wraps it with
+// NewResponseWriter for r's protocol.
+func AsResponseWriter(w http.ResponseWriter, r *http.Request) ResponseWriter {
+	if ww, ok := w.(ResponseWriter); ok {
+		return ww
+	}
+	return NewResponseWriter(w, r.ProtoMajor)
+}
+
+// ResponseStarted reports whether w is a started response: one whose status
+// line has been sent, by WriteHeader with a final (non-1xx) status or by a
+// body write. It can tell only for a ResponseWriter; any other writer reports
+// false, because nothing records what was sent through it.
+func ResponseStarted(w http.ResponseWriter) bool {
+	ww, ok := w.(ResponseWriter)
+	return ok && ww.Status() != 0
+}

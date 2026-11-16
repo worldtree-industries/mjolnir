@@ -14,7 +14,7 @@ Mjolnir is an opinionated wrapper around [go-chi/chi](https://github.com/go-chi/
   - Remote address (the transport peer, never rewritten)
   - Client IP (when the router resolves one; see Router)
   - The line is written in a `defer`, so it is emitted even when the handler panics
-  - Handlers keep the server writer's `http.Flusher`, `http.Hijacker`, and `io.ReaderFrom`, so streaming and `http.NewResponseController` work; `middleware.NewResponseWriter` is the same wrapper for your own middleware
+  - Handlers keep the server writer's `http.Flusher`, `http.Hijacker`, and `io.ReaderFrom`, so streaming and `http.NewResponseController` work; `middleware.AsResponseWriter` reuses or adds the same wrapper for your own middleware, and `middleware.ResponseStarted` reports whether the status line has gone out
   - `RequestLoggerWith` takes an injected `*slog.Logger` instead of the `"http"` component logger
 
 - **Request ID Tracking**: Automatic request ID generation and propagation
@@ -271,8 +271,9 @@ r.Get("/widgets/{id}", httpx.Handler(func(w http.ResponseWriter, r *http.Request
 ```
 
 The helpers are `BadRequest`, `Unauthorized`, `Forbidden`, `NotFound`,
-`Conflict`, and `UnprocessableEntity` (each takes a code and a public detail),
-and `Internal` and `ServiceUnavailable` (each takes the cause).
+`Conflict`, and `UnprocessableEntity` (each takes a code and a public detail;
+an empty code defaults to the status in snake case, such as `not_found`, since
+a helper cannot return an error), and `Internal` and `ServiceUnavailable` (each takes the cause).
 `httpx.NewProblem(status, code, detail, cause)` covers any other 4xx or 5xx
 status and code; it rejects other statuses, an empty code, and a 5xx without a
 cause. `httpx.HandlerWithLogger` takes the logger to use instead of the
@@ -310,6 +311,10 @@ are the exception: they answer 200/503 with an empty body):
 - **A response that already started**: if the handler wrote a status or any
   body before returning a problem, nothing more is written, so bodies are
   never concatenated. The problem is logged at Warn instead.
-  `httpx.WriteProblem` reports this case as `httpx.ErrResponseStarted`.
+  `httpx.WriteProblem` reports this case as `httpx.ErrResponseStarted`, but
+  only when its writer is a `middleware.ResponseWriter`: `httpx.Handler`
+  always provides one, while a direct `WriteProblem` call on any other writer
+  writes the problem unconditionally. Wrap with `middleware.AsResponseWriter`
+  first to get the check.
 
 This approach ensures that sensitive internal error details are never exposed to clients while still providing meaningful error messages for client-side issues.

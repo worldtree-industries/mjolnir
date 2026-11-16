@@ -23,10 +23,7 @@ import (
 func recoverer(lg *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			rw, ok := w.(middleware.ResponseWriter)
-			if !ok {
-				rw = middleware.NewResponseWriter(w, r.ProtoMajor)
-			}
+			rw := middleware.AsResponseWriter(w, r)
 
 			defer func() {
 				rec := recover()
@@ -37,8 +34,7 @@ func recoverer(lg *slog.Logger) func(http.Handler) http.Handler {
 					panic(rec)
 				}
 
-				// A status, or any body, has been sent.
-				started := rw.Status() != 0
+				started := middleware.ResponseStarted(rw)
 
 				attrs := []slog.Attr{
 					slog.String("panic", fmt.Sprint(rec)),
