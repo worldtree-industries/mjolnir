@@ -32,6 +32,10 @@ Mjolnir is an opinionated wrapper around [go-chi/chi](https://github.com/go-chi/
   - `/livez`, `/readyz`, and `/startupz`, for GET and HEAD; the paths are reserved for the framework
   - Automatic drain on SIGINT or SIGTERM within one time budget, with readiness as the drain signal
 
+- **Environments**: The fixed set of deployment stages (`dev`, `staging`, `prod`) in `utils/environment`
+  - `environment.FromEnv(name)` reads one from a named environment variable; `environment.List()` lists them all
+  - Parsing is exact (no case-folding, trimming or defaulting); a missing variable is told apart from an unknown value
+
 - **Standardized Error Handling**: Comprehensive error management system
   - RFC 9457 `application/problem+json` error responses
   - Automatic internal error logging
@@ -254,6 +258,22 @@ answers 415 for any other media type, 413 for a value that runs past the limit,
 and 400 for a body that is not a JSON value of the expected shape. It reads the
 first JSON value only and ignores anything after it, as `json.Decoder` does. `Respond` marshals the payload before
 writing anything, so a marshal failure still becomes a clean 500.
+
+### Environments
+
+`utils/environment` defines the Environments a deployment can run in: `dev`, `staging` and `prod`.
+`FromEnv` reads the current one from the environment variable you name and returns
+`environment.ErrMissing` (unset or empty) or `environment.ErrUnknown` (not exactly one of the
+Environments); test for them with `errors.Is`. `Parse` validates a string the same way, and `List`
+returns every Environment.
+
+```go
+env, err := environment.FromEnv("MYAPP_ENVIRONMENT")
+if err != nil {
+  return err // errors.Is(err, environment.ErrMissing) or ErrUnknown
+}
+for _, e := range environment.List() { /* create per-Environment resources */ }
+```
 
 ### Error Handling Utilities
 

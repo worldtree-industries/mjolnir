@@ -51,6 +51,7 @@ A component that formats and delivers log events to a destination. The framework
 | **App Mux** | The `*chi.Mux` a `Router` embeds, where the app's routes and middleware live; it is mounted beneath the framework-owned outer mux, so app middleware always runs inside the framework stack and never on a probe path (ADR-0005) |
 | **Framework Stack** | The middleware the router installs in a fixed order on every request: request ID, client IP, access logging, panic recovery, HEAD routing; apps cannot reorder it |
 | **Trusted Proxy** | A reverse proxy whose CIDR prefix is listed in `router.Config.TrustedProxies`; only its `X-Forwarded-For` entries are believed when resolving the client IP. With none listed, the client IP is the transport peer (ADR-0007) |
+| **Environment** | A deployment stage (`dev`, `staging`, `prod`) from the fixed set in `utils/environment`; parsed exactly, with a missing variable (`ErrMissing`) distinct from an unknown value (`ErrUnknown`) |
 | **Release Tag** | A lightweight `vX.Y.Z` tag on a merge commit to `main`; the release itself, since a library publishes no artifacts (ADR-0006) |
 | **Bump** | The requested version step for a merge: `semver:major` or `semver:minor` from the pull request's labels, `patch` otherwise (ADR-0006) |
 | **Version Guard** | The check that the `go.mod` module path's `/vN` suffix matches the major version a bump would publish; blocks merging and runs again before tagging |
